@@ -1,1 +1,82 @@
 # hakoniwa-drone-control-adapter-ap
+
+ArduPilot control backend implementation for the public interfaces provided by
+[`hakoniwa-drone-control-adapter`](https://github.com/hakoniwalab/hakoniwa-drone-control-adapter).
+
+## Status
+
+This repository is an early technical evaluation. The first supported backend
+is body-rate control using ArduPilot's own `AC_PID`, `SlewLimiter`, and scalar
+low-pass filter implementations from the pinned ArduCopter 4.6.3 source tree.
+
+The spike confirms that the existing `IRateControlBackend` contract can host
+ArduPilot rate control without changing the public interface:
+
+- `RateControlInput::dt_sec` supplies the controller time step.
+- Roll, pitch, and yaw target/measured rates map directly to three `AC_PID`
+  instances.
+- The public positive/negative saturation flags are combined into ArduPilot's
+  single per-axis integrator limit flag.
+- `AC_PID::update_all()` and `AC_PID::get_ff()` are summed at the adapter
+  boundary, matching the value that ArduPilot ultimately passes to its motor
+  layer.
+
+The current scope intentionally excludes:
+
+- integration into the normal `hakoniwa-drone-pro` build
+- redistribution of a binary linked with proprietary components
+- attitude, position, motor allocation, and EKF backends
+
+## Source layout
+
+- `thirdparty/hakoniwa-drone-control-adapter`: public MIT-licensed interface
+- `thirdparty/ardupilot`: pinned GPL-3.0-or-later ArduPilot source
+- `include/` and `src/`: GPL adapter implementation and narrow runtime shim
+- `test/`: adapter-level regression tests
+
+## Build
+
+Initialize the pinned dependencies:
+
+```bash
+git submodule update --init --recursive
+```
+
+Generate ArduPilot's SITL build configuration, then build the adapter and run
+its tests:
+
+```bash
+bash build.bash build
+bash build.bash test
+```
+
+`build.bash` uses `python3` by default. Select a Python environment containing
+ArduPilot's build dependencies when necessary:
+
+```bash
+ARDUPILOT_PYTHON=/path/to/venv/bin/python bash build.bash build
+```
+
+The adapter compiles only the required ArduPilot controller/filter sources. It
+does not link the complete ArduCopter vehicle application. The runtime shim
+deliberately provides no EEPROM-backed `AP_Param` persistence: the adapter
+configuration is the authoritative source of gains. ArduPilot dynamic notch
+filters are also excluded because they require the full vehicle-level filter
+singleton.
+
+## Version pins
+
+- ArduPilot: `Copter-4.6.3` / `92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`
+- Hakoniwa adapter interface: `8990200763fe2a4ec492d50ad47a4bd2090efe94`
+
+These are Git submodule commits, not floating branch dependencies.
+
+The build is intended for local evaluation. Do not publish the resulting
+combined binary as a release, CI artifact, package, or container image without
+performing the applicable GPL compliance review.
+
+## License
+
+This project is licensed under the GNU General Public License version 3 or
+later (`GPL-3.0-or-later`). ArduPilot-derived components retain their upstream
+copyright and license notices.
