@@ -18,8 +18,19 @@ ArduPilot rate control without changing the public interface:
 - The public positive/negative saturation flags are combined into ArduPilot's
   single per-axis integrator limit flag.
 - `AC_PID::update_all()` and `AC_PID::get_ff()` are summed at the adapter
-  boundary, matching the value that ArduPilot ultimately passes to its motor
-  layer.
+boundary, matching the value that ArduPilot ultimately passes to its motor
+layer.
+
+The first attitude backend maps WXYZ current/target quaternions and yaw-rate
+feed-forward to an ArduPilot-compatible body-rate target. It extracts the
+ordered thrust-vector and heading correction from ArduCopter 4.6.3, including
+the square-root angle controller, yaw-error guard, rate limits, and large-tilt
+feed-forward suppression.
+
+`AC_AttitudeControl` normally reads the IMU time step and measured gyro through
+vehicle objects. Both values are controller-generic, so the public
+`AttitudeControlInput` now carries `dt_sec` and measured body `rate` directly.
+No ArduPilot-specific state facade or vehicle singleton is required.
 
 The current implementation also includes a first control-allocation backend.
 It adapts the normalization and desaturation sequence from ArduPilot
@@ -41,8 +52,12 @@ The current scope intentionally excludes:
 
 - integration into the normal `hakoniwa-drone-pro` build
 - redistribution of a binary linked with proprietary components
-- attitude, position, allocation-feedback, and EKF backends
+- position, allocation-feedback, and EKF backends
 - tilted/reversible rotors and ArduPilot failed-motor thrust boost
+
+The attitude implementation has deterministic adapter tests. Direct
+reference-vector comparison against a live ArduCopter 4.6.3 controller remains
+an explicit completion gate before claiming full numerical parity.
 
 ## Source layout
 

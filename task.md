@@ -63,17 +63,25 @@ produce equivalent per-axis outputs for the same input sequence.
 
 ## Milestone 2: Attitude Control
 
-- [ ] Investigate the minimum reusable boundary in
+- [x] Investigate the minimum reusable boundary in
   `AC_AttitudeControl` / `AC_AttitudeControl_Multi`
-- [ ] Record dependencies on `AP_AHRS_View`, `AP_Motors`, input shaping, and
+- [x] Record dependencies on `AP_AHRS_View`, `AP_Motors`, input shaping, and
   angle/rate limits
-- [ ] Decide whether a narrow state facade can replace vehicle singletons
+- [x] Decide whether a narrow state facade can replace vehicle singletons
   without copying attitude-control logic
-- [ ] Implement `IAttitudeControlBackend`
-- [ ] Map public WXYZ quaternion and yaw-rate feed-forward into ArduPilot units
-- [ ] Preserve ArduPilot thrust-vector correction and quaternion error order
-- [ ] Add quaternion sign, yaw wrap, tilt limit, and reset tests
+- [x] Implement `IAttitudeControlBackend`
+- [x] Map public WXYZ quaternion and yaw-rate feed-forward into ArduPilot units
+- [x] Preserve ArduPilot thrust-vector correction and quaternion error order
+- [x] Add quaternion sign, yaw wrap, tilt limit, and reset tests
 - [ ] Add ArduCopter 4.6.3 reference-vector comparison
+
+Decision: directly instantiating `AC_AttitudeControl_Multi` would pull in
+`AP_AHRS_View`, `AP_Motors`, parameter storage, and vehicle singletons. The
+backend therefore extracts the pure quaternion controller. IMU `dt` and
+measured body rate are controller-generic state, so they are explicit fields
+of the common `AttitudeControlInput`; `context` remains reserved for optional
+extensions. This preserves the large-tilt yaw safety path without a vehicle
+singleton or ArduPilot-specific state facade.
 
 Completion gate: attitude input produces equivalent body-rate targets without
 requiring a live ArduPilot vehicle process.
