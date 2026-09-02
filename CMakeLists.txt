@@ -19,6 +19,7 @@ if(NOT EXISTS "${ARDUPILOT_BUILD_ROOT}/ap_config.h")
 endif()
 
 add_library(hakoniwa_drone_control_adapter_ap STATIC
+    src/ap_control_allocation_backend.cpp
     src/ap_rate_control_backend.cpp
     src/ardupilot_runtime_shim.cpp
     "${ARDUPILOT_ROOT}/libraries/AC_PID/AC_PID.cpp"
@@ -58,6 +59,13 @@ target_compile_definitions(hakoniwa_drone_control_adapter_ap PRIVATE
     CONFIG_HAL_BOARD_SUBTYPE=HAL_BOARD_SUBTYPE_NONE)
 
 if(BUILD_TESTING)
+    add_executable(ap_control_allocation_backend_smoke
+        test/ap_control_allocation_backend_smoke.cpp)
+    target_link_libraries(ap_control_allocation_backend_smoke
+        PRIVATE hakoniwa_drone_control_adapter_ap)
+    add_test(NAME ap_control_allocation_backend_smoke
+        COMMAND ap_control_allocation_backend_smoke)
+
     add_executable(ap_rate_control_backend_smoke
         test/ap_rate_control_backend_smoke.cpp)
     target_link_libraries(ap_rate_control_backend_smoke

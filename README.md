@@ -21,17 +21,34 @@ ArduPilot rate control without changing the public interface:
   boundary, matching the value that ArduPilot ultimately passes to its motor
   layer.
 
+The current implementation also includes a first control-allocation backend.
+It adapts the normalization and desaturation sequence from ArduPilot
+`AP_MotorsMatrix` to the pure `IControlAllocationBackend` contract.
+
+Supported in the first allocator:
+
+- 1 to 12 fixed, coplanar rotors with downward FRD thrust axes
+- geometry-derived roll, pitch, and yaw factors
+- ArduPilot matrix-factor normalization
+- yaw headroom and R/P/Y desaturation
+- Quad and Hexa geometry supplied in Hakoniwa actuator order
+
+Its output is normalized motor thrust before ArduPilot's `MOT_THST_EXPO`, spin
+range, PWM, spool-state, battery-compensation, and lost-motor processing. Those
+vehicle-layer features are not silently approximated by the allocator.
+
 The current scope intentionally excludes:
 
 - integration into the normal `hakoniwa-drone-pro` build
 - redistribution of a binary linked with proprietary components
-- attitude, position, motor allocation, and EKF backends
+- attitude, position, allocation-feedback, and EKF backends
+- tilted/reversible rotors and ArduPilot failed-motor thrust boost
 
 ## Source layout
 
 - `thirdparty/hakoniwa-drone-control-adapter`: public MIT-licensed interface
 - `thirdparty/ardupilot`: pinned GPL-3.0-or-later ArduPilot source
-- `include/` and `src/`: GPL adapter implementation and narrow runtime shim
+- `include/` and `src/`: GPL adapter implementations and narrow runtime shim
 - `test/`: adapter-level regression tests
 
 ## Build

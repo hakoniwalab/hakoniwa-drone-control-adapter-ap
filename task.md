@@ -29,6 +29,9 @@ another ArduPilot release until its parameter semantics and tests are rerun.
 - [x] Map per-direction Hakoniwa saturation to ArduPilot's per-axis limit
 - [x] Match ArduPilot's feedback plus feed-forward motor-input boundary
 - [x] Add Rate backend smoke tests
+- [x] Add the first fixed-rotor `ApControlAllocationBackend`
+- [x] Port ArduPilot matrix normalization and desaturation into a pure backend
+- [x] Test Quad/Hexa collective, roll differential, yaw clipping, and guards
 - [x] Document the local-evaluation and redistribution boundary
 
 ## Implementation Policy
@@ -104,15 +107,18 @@ state and the split adapters do not silently change its control law.
 
 ## Milestone 4: Control Allocation and Feedback
 
-- [ ] Investigate `AP_MotorsMatrix` and `AP_MotorsMatrix_6DoF` boundaries
-- [ ] Establish ArduPilot motor ordering versus Hakoniwa actuator index
-- [ ] Implement `IControlAllocationBackend` for supported rotor geometries
+- [x] Investigate the first `AP_MotorsMatrix` fixed-rotor boundary
+- [ ] Investigate the separate `AP_MotorsMatrix_6DoF` boundary
+- [x] Preserve Hakoniwa actuator input order at the pure geometry boundary
+- [x] Implement `IControlAllocationBackend` for fixed coplanar rotor geometry
 - [ ] Preserve actuator min/max, trim, lost-motor, and clipping semantics
-- [ ] Explicitly reject unsupported geometries and rotor counts
-- [ ] Document the Copter 4.6.3 maximum of 12 motors while retaining the
+- [x] Explicitly reject unsupported geometries and rotor counts
+- [x] Document the Copter 4.6.3 maximum of 12 motors while retaining the
   public interface capacity of 16
 - [ ] Implement `IAllocationFeedbackPolicy` from ArduPilot motor-limit flags
-- [ ] Test Quad/X, Hexa/X, Hexa/DJI-X mapping, clipping, and one-motor failure
+- [x] Test Quad/X and Hexa geometry, collective, differential output, and clipping
+- [ ] Test Hexa/DJI-X ordering at the configuration-converter boundary
+- [ ] Add one-motor failure and thrust-boost handling, or reject it explicitly
 - [ ] Add allocation reference vectors from ArduCopter 4.6.3
 
 Completion gate: actuator ordering and saturation feedback are proven for the
