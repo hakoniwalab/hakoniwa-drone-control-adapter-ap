@@ -5,9 +5,9 @@ ArduPilot control backend implementation for the public interfaces provided by
 
 ## Status
 
-This repository is an early technical evaluation. The first supported backend
-is body-rate control using ArduPilot's own `AC_PID`, `SlewLimiter`, and scalar
-low-pass filter implementations from the pinned ArduCopter 4.6.3 source tree.
+This repository is an early technical evaluation of body-rate, attitude,
+control-allocation, and EKF3 backends using the pinned ArduCopter 4.6.3 source
+tree.
 
 The spike confirms that the existing `IRateControlBackend` contract can host
 ArduPilot rate control without changing the public interface:
@@ -48,11 +48,24 @@ Its output is normalized motor thrust before ArduPilot's `MOT_THST_EXPO`, spin
 range, PWM, spool-state, battery-compensation, and lost-motor processing. Those
 vehicle-layer features are not silently approximated by the allocator.
 
+The optional EKF3 backend runs ArduPilot's actual `NavEKF3` in process through
+the upstream `AP_DAL` replay boundary. It accepts one body-centred IMU, GPS,
+barometer, and magnetometer through `IEkfAdapter`; it does not link the full
+ArduCopter vehicle or instantiate hardware sensor drivers. The initial static
+test feeds 60 seconds of 400 Hz IMU data and verifies valid attitude, local
+position, global position, bounded velocity, and strict IMU timestamp
+monotonicity. A separate constant-velocity test verifies that northward GPS
+position and velocity produce the expected NED estimate without east-axis
+leakage. The test also covers the distinct armed-on-ground and in-air states;
+the backend does not infer one from the other.
+
 The current scope intentionally excludes:
 
 - integration into the normal `hakoniwa-drone-pro` build
 - redistribution of a binary linked with proprietary components
-- position, allocation-feedback, and EKF backends
+- position and allocation-feedback backends
+- multi-lane EKF, runtime EKF reset, optional aiding sensors, and `.parm`
+  configuration overlays
 - tilted/reversible rotors and ArduPilot failed-motor thrust boost
 
 The attitude implementation has deterministic adapter tests. Direct
@@ -89,17 +102,25 @@ ArduPilot's build dependencies when necessary:
 ARDUPILOT_PYTHON=/path/to/venv/bin/python bash build.bash build
 ```
 
-The adapter compiles only the required ArduPilot controller/filter sources. It
-does not link the complete ArduCopter vehicle application. The runtime shim
-deliberately provides no EEPROM-backed `AP_Param` persistence: the adapter
-configuration is the authoritative source of gains. ArduPilot dynamic notch
-filters are also excluded because they require the full vehicle-level filter
-singleton.
+The adapter compiles only the required ArduPilot controller/filter sources and,
+when invoked through `build.bash`, Waf's standalone DAL library. It does not
+link the complete ArduCopter vehicle application. The runtime shim deliberately
+provides no EEPROM-backed `AP_Param` persistence: adapter configuration is the
+authoritative source of control gains, while EKF3 currently uses upstream
+defaults. ArduPilot dynamic notch filters are excluded because they require the
+full vehicle-level filter singleton.
+
+`build.bash` enables EKF3 explicitly and temporarily applies the narrow patch
+in `patches/` that replaces the standalone DAL's live IMU-position lookup with
+a zero lever arm. The patch is reversed automatically when the command exits,
+so the pinned ArduPilot submodule remains clean. Plain CMake configuration keeps
+`HAKONIWA_AP_ENABLE_EKF3=OFF` by default; this preserves the pre-EKF controller
+build when the Waf DAL archive is unavailable.
 
 ## Version pins
 
 - ArduPilot: `Copter-4.6.3` / `92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`
-- Hakoniwa adapter interface: `8990200763fe2a4ec492d50ad47a4bd2090efe94`
+- Hakoniwa adapter interface: `b58b71a491d074cd8fcb68525e2209a8e3d881d5`
 
 These are Git submodule commits, not floating branch dependencies.
 

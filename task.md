@@ -12,7 +12,7 @@ release artifacts must not acquire an ArduPilot dependency.
 ## Version Baseline
 
 - ArduPilot: Copter 4.6.3 (`92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`)
-- Public Hakoniwa interface: `8990200763fe2a4ec492d50ad47a4bd2090efe94`
+- Public Hakoniwa interface: `b58b71a491d074cd8fcb68525e2209a8e3d881d5`
 - Build target: ArduPilot SITL configuration
 - License: `GPL-3.0-or-later`
 
@@ -33,6 +33,8 @@ another ArduPilot release until its parameter semantics and tests are rerun.
 - [x] Port ArduPilot matrix normalization and desaturation into a pure backend
 - [x] Test Quad/Hexa collective, roll differential, yaw clipping, and guards
 - [x] Document the local-evaluation and redistribution boundary
+- [x] Prove a minimal in-process NavEKF3 backend with one IMU, GPS, barometer,
+  and magnetometer
 
 ## Implementation Policy
 
@@ -149,21 +151,46 @@ backend and a local integration test can run without modifying PRO CMake.
 
 ## Milestone 6: EKF3 Feasibility
 
-EKF is intentionally last because `AP_NavEKF3` depends heavily on ArduPilot
-sensor, AHRS, timing, origin, and parameter infrastructure.
+This milestone is being completed independently before position control because
+PID auto-tuning before SITL is a primary use case and EKF3 is the highest-risk
+backend. The implementation uses ArduPilot's own DAL/replay boundary; it does
+not reproduce the estimator equations or embed the complete flight controller.
 
-- [ ] Map `IEkfAdapter` inputs to ArduPilot IMU, magnetometer, barometer, and
+- [x] Map `IEkfAdapter` inputs to ArduPilot IMU, magnetometer, barometer, and
   GPS sample contracts
-- [ ] Inventory all `AP_NavEKF3` singleton and scheduler dependencies
-- [ ] Decide whether direct library isolation is maintainable
+- [x] Inventory all `AP_NavEKF3` singleton and scheduler dependencies
+- [x] Decide whether direct library isolation is maintainable
 - [ ] If isolation is not maintainable, document a process-boundary adapter as
   the preferred design instead of growing a large fake HAL
-- [ ] Map EKF validity, aiding-source, fusion, and innovation status outputs
-- [ ] Add timestamp monotonicity and sensor-consistency tests
+- [x] Map EKF validity, aiding-source, fusion, and innovation status outputs
+- [x] Add timestamp monotonicity, static convergence, and constant-velocity
+  sensor-consistency smoke tests
 - [ ] Compare output against ArduCopter 4.6.3 using identical sensor vectors
 
-Completion gate: proceed only if the adapter remains smaller and clearer than
-embedding or communicating with the existing ArduPilot SITL process.
+Current feasibility result: direct isolation is maintainable for the first
+evaluation. The backend links the Waf-produced `AP_DAL_libs` archive and feeds
+real `NavEKF3` through `log_RISH/RISI`, `RMGH/RMGI`, `RBRH/RBRI`, and
+`RGPH/RGPI/RGPJ`. A 60-second 400 Hz static-vector test reaches valid attitude,
+local-position, and global-position outputs.
+
+First-evaluation limits are explicit:
+
+- one EKF instance, one body-centred IMU, one GPS, one barometer, one compass
+- ArduPilot defaults plus the common magnetic-declination setting; `.parm`
+  overlay support is deferred
+- `armed`, `in_air`, and `at_rest` are independent common-interface inputs
+- no runtime reset after NavEKF3 allocates its core
+- no lane switching, GSF yaw, optical flow, rangefinder, visual odometry, or
+  hardware sensor drivers
+
+The only upstream adaptation is a build-time, reversible patch that makes the
+standalone DAL use a zero IMU lever arm instead of calling the live
+`AP_InertialSensor` singleton. `build.bash` applies it only while compiling and
+restores the pinned submodule on exit.
+
+Completion gate: the architectural feasibility gate has passed. Numerical
+parity is not claimed until the same recorded DAL input sequence is replayed by
+both ArduCopter 4.6.3 and this backend.
 
 ## Final Validation
 
