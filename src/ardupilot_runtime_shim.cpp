@@ -15,7 +15,10 @@
 #include <limits>
 #include <type_traits>
 
-void AP_Param::setup_object_defaults(const void*, const GroupInfo*)
+// Weak: the control stages set their values from their own configuration, but
+// NavEKF3 needs its parameter defaults. When the EKF3 runtime shim is linked in
+// as well (the Control Link plugin), its implementation must be the one used.
+__attribute__((weak)) void AP_Param::setup_object_defaults(const void*, const GroupInfo*)
 {
 }
 

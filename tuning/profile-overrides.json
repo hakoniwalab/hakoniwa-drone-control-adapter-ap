@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "description": "ArduPilot adapter overrides for a px4-ekf-flow (plugin) PID tuning profile. The search ranges are the PX4 ones; only the EKF wait differs: NavEKF3 is ready ~33 s after start (ArduPilot's GPS checks), PX4's EKF2 ~10 s.",
+  "ekf_ready_extra_sec": 32.0
+}

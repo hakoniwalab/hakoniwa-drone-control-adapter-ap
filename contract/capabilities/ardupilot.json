@@ -8,8 +8,8 @@
       "reference": "docs/ardupilot-adapter-impl.md"
     },
     "position_control_3d": {
-      "value": "not_provided",
-      "alternate_responsibility": "AltitudeControl と HorizontalPositionControl の独立stageを使用する",
+      "value": "provided",
+      "alternate_responsibility": "AC_PosControl相当: 高度（AC_P_1D/AC_PID）と水平（AC_P_2D/AC_PID_2D）のstageを合わせてtarget attitudeとthrustを作る",
       "reference": "docs/ardupilot-adapter-impl.md"
     },
     "attitude_integral": {
@@ -30,13 +30,13 @@
       "reference": "docs/ardupilot-adapter-impl.md"
     },
     "ekf_adapter": {
-      "value": "not_provided",
-      "alternate_responsibility": "NavEKF3 backendは任意の別ライブラリで、標準AP package targetには含めない",
+      "value": "provided",
+      "alternate_responsibility": "NavEKF3（DAL replay境界）。プラグインはHAKONIWA_AP_ENABLE_EKF3=ON（build.bashの既定）で提供する",
       "reference": "docs/ardupilot-adapter-impl.md"
     },
     "position_3d_tilt_compensation": {
-      "value": "none",
-      "alternate_responsibility": "PositionControl3Dを提供せず、AltitudeControlが鉛直の傾き補正を行う",
+      "value": "backend",
+      "alternate_responsibility": "高度stageのangle boost（ArduPilotのthrottle tilt補正）",
       "reference": "docs/ardupilot-adapter-impl.md"
     }
   }

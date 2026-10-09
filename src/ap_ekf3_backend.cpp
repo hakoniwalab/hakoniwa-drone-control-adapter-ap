@@ -103,16 +103,28 @@ public:
         home_alt_ = 0;
         home_set_ = false;
         have_imu_ = false;
+        imu_pending_ = false;
         have_mag_ = false;
         have_baro_ = false;
+        baro_ground_set_ = false;
+        baro_ground_alt_m_ = 0.0;
         have_gps_ = false;
         armed_ = false;
         in_air_ = false;
         at_rest_ = true;
     }
 
+    // A host samples its sensors from time 0, before they have a first value
+    // (Hakoniwa: pressure altitude, GPS position 0, no gravity on the IMU).
+    // Such a sample would become the barometer's ground level and the home,
+    // so samples at time 0 are not used.
+    static bool before_first_value(std::uint64_t time_usec) { return time_usec == 0; }
+
     void push_imu(const EkfImuInput& input, double dt_sec)
     {
+        if (before_first_value(input.time_usec)) {
+            return;
+        }
         if (!(dt_sec > 0.0) || !std::isfinite(dt_sec)) {
             throw std::invalid_argument("EKF IMU dt must be finite and positive");
         }
@@ -147,10 +159,14 @@ public:
         current_time_usec_ = input.time_usec;
         last_imu_time_usec_ = input.time_usec;
         have_imu_ = true;
+        imu_pending_ = true;
     }
 
     void push_mag(const EkfMagInput& input)
     {
+        if (before_first_value(input.time_usec)) {
+            return;
+        }
         mag_header_.declination = radians(static_cast<float>(config_.mag_declination_deg));
         mag_header_.available = true;
         mag_header_.count = 1;
@@ -176,17 +192,31 @@ public:
 
     void push_baro(const EkfBaroInput& input)
     {
+        if (before_first_value(input.time_usec)) {
+            return;
+        }
         baro_header_.primary = 0;
         baro_header_.num_instances = 1;
         baro_.instance = 0;
         baro_.last_update_ms = static_cast<std::uint32_t>(input.time_usec / 1000ULL);
-        baro_.altitude = finite_float(input.pressure_alt_m, "baro altitude");
+        // AP_Baro reports altitude relative to the ground level it calibrated
+        // at start; the host's pressure altitude is absolute. The first sample
+        // after a reset is that ground level.
+        const double pressure_alt_m = finite_float(input.pressure_alt_m, "baro altitude");
+        if (!baro_ground_set_) {
+            baro_ground_alt_m_ = pressure_alt_m;
+            baro_ground_set_ = true;
+        }
+        baro_.altitude = static_cast<float>(pressure_alt_m - baro_ground_alt_m_);
         baro_.healthy = true;
         have_baro_ = true;
     }
 
     void push_gps(const EkfHilGpsInput& input)
     {
+        if (before_first_value(input.time_usec)) {
+            return;
+        }
         gps_header_.num_sensors = 1;
         gps_header_.primary_sensor = 0;
 
@@ -232,9 +262,14 @@ public:
 
     void update()
     {
-        if (!have_imu_) {
+        // NavEKF3 runs once per new IMU sample: a host may call update() more
+        // often than it pushes IMU data, and replaying the same delta angle /
+        // velocity would integrate it twice. Mag, baro and GPS pushed meanwhile
+        // go in with the next IMU sample.
+        if (!have_imu_ || !imu_pending_) {
             return;
         }
+        imu_pending_ = false;
 
         log_RFRH frame_header{};
         frame_header.time_us = current_time_usec_;
@@ -288,11 +323,11 @@ public:
         }
 
         Quaternion attitude;
-        // NavEKF3's direct quaternion output is NED-to-body. Its conjugate is
-        // the body-to-NED convention used by the public adapter interface.
+        // NavEKF3's quaternion rotates body (FRD) into NED, the convention of
+        // the public adapter interface (Contract Test CT-EKF-002..004, 007).
         ekf_->getQuaternion(attitude);
         state_.attitude_quaternion_wxyz = {
-            attitude.q1, -attitude.q2, -attitude.q3, -attitude.q4};
+            attitude.q1, attitude.q2, attitude.q3, attitude.q4};
 
         Vector3f velocity;
         ekf_->getVelNED(velocity);
@@ -367,6 +402,9 @@ public:
     std::int32_t home_alt_{0};
     bool home_set_{false};
     bool have_imu_{false};
+    bool imu_pending_{false};
+    bool baro_ground_set_{false};
+    double baro_ground_alt_m_{0.0};
     bool have_mag_{false};
     bool have_baro_{false};
     bool have_gps_{false};

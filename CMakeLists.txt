@@ -31,6 +31,7 @@ add_library(hakoniwa_drone_control_adapter_ap STATIC
     src/ap_attitude_control_backend.cpp
     src/ap_control_allocation_backend.cpp
     src/ap_horizontal_position_control_backend.cpp
+    src/ap_position_control_3d_backend.cpp
     src/ap_rate_control_backend.cpp
     src/ardupilot_controller_config_loader.cpp
     src/ardupilot_runtime_shim.cpp
@@ -136,6 +137,24 @@ target_compile_definitions(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
 set_target_properties(hakoniwa_drone_control_adapter_ap_plugin PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON)
+if(HAKONIWA_AP_ENABLE_EKF3)
+    # The plugin offers NavEKF3 as its EKF stage.
+    set_target_properties(hakoniwa_drone_control_adapter_ap_ekf3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
+        hakoniwa_drone_control_adapter_ap_ekf3 ardupilot_dal)
+    target_compile_definitions(hakoniwa_drone_control_adapter_ap_plugin PRIVATE HAKO_AP_PLUGIN_WITH_EKF3)
+    # As the EKF3 smoke tests: drop the DAL sections NavEKF3 does not reach.
+    # Only the plugin entry is exported, so it is the one root to keep.
+    if(APPLE)
+        target_link_options(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
+            "-Wl,-dead_strip" "-Wl,-exported_symbol,_hako_control_adapter_plugin_v1")
+    else()
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ap_plugin_exports.map"
+            "{ global: hako_control_adapter_plugin_v1; local: *; };\n")
+        target_link_options(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
+            "-Wl,--gc-sections" "-Wl,--version-script=${CMAKE_CURRENT_BINARY_DIR}/ap_plugin_exports.map")
+    endif()
+endif()
 install(TARGETS hakoniwa_drone_control_adapter_ap_plugin LIBRARY DESTINATION lib)
 
 include(CMakePackageConfigHelpers)

@@ -68,3 +68,4 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+work/

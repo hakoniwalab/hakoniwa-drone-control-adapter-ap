@@ -5,8 +5,8 @@ revision `1814967`.
 
 | Stage | Implementation | Notes |
 |---|---|---|
-| Altitude | Upstream `AC_P_1D` and two `AC_PID` instances with the `AC_PosControl` z orchestration extracted | Position sqrt control, velocity/acceleration filters and feed-forward, speed/acceleration/jerk limits, hover conversion, and angle boost are retained. |
-| Horizontal | Upstream `AC_P_2D` and `AC_PID_2D` with the `AC_PosControl` xy orchestration extracted | Position sqrt control, filtered velocity PID, acceleration/jerk/lean limits, and NED-to-FRD lean conversion are retained. |
+| Altitude | Upstream `AC_P_1D` and two `AC_PID` instances with the `AC_PosControl` z orchestration extracted | Position sqrt control (speed and acceleration limits), velocity/acceleration filters and feed-forward, hover conversion, and angle boost are retained. As in `AC_PosControl`, the velocity PID output feeds the acceleration loop without a clamp or slew limit; the jerk limit belongs to ArduPilot's target input shaping, which the adapter does not do (Drone PRO supplies the target). |
+| Horizontal | Upstream `AC_P_2D` and `AC_PID_2D` with the `AC_PosControl` xy orchestration extracted | Position sqrt control (speed and acceleration limits), filtered velocity PID, the lean-angle limit on the acceleration target, and NED-to-FRD lean conversion are retained. As in `AC_PosControl`, there is no slew limit in the feedback path (the jerk limit belongs to input shaping). |
 | Position3D | Not provided | The split backends cover PID-tuning phases; a faithful coupled facade was not completed. |
 | Attitude | Quaternion controller extracted from `AC_AttitudeControl` | Produces FRD body-rate targets. |
 | Rate | Three upstream `AC_PID` objects | `landed` clears integrators; `dt_sec`, filters, D/FF, slew max and slew tau are honored. |

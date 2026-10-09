@@ -6,7 +6,11 @@
 
 #include "hakoniwa/drone/control_adapter/adapter_plugin.hpp"
 #include "hakoniwa/drone/control_adapter/ap_allocation_feedback_policy.hpp"
+#include "hakoniwa/drone/control_adapter/ap_position_control_3d_backend.hpp"
 #include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
+#ifdef HAKO_AP_PLUGIN_WITH_EKF3
+#include "hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -198,9 +202,21 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
                 new adapter::ApControlAllocationBackend(config.control_allocation));
         case BackendKind::AllocationFeedbackPolicy:
             return static_cast<adapter::IAllocationFeedbackPolicy*>(new adapter::ApAllocationFeedbackPolicy());
-        case BackendKind::PositionControl3D:  // not provided: the split altitude / horizontal stages
-        case BackendKind::Ekf:                // not provided in the plugin (NavEKF3 is an optional build)
-            return nullptr;
+        case BackendKind::Ekf: {
+#ifdef HAKO_AP_PLUGIN_WITH_EKF3
+            // NavEKF3 through the DAL replay boundary (ap_ekf3_backend.hpp).
+            auto* ekf = new adapter::ApEkf3Backend();
+            if (argument != nullptr) {
+                ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));
+            }
+            return static_cast<adapter::IEkfAdapter*>(ekf);
+#else
+            return nullptr;  // built without NavEKF3 (HAKONIWA_AP_ENABLE_EKF3=OFF)
+#endif
+        }
+        case BackendKind::PositionControl3D:
+            return static_cast<adapter::IPositionControl3DBackend*>(
+                new adapter::ApPositionControl3DBackend(config.altitude_control, config.horizontal_control));
         }
         set_error(error, error_size, "unknown backend kind " + std::to_string(static_cast<unsigned>(kind)));
         return nullptr;
