@@ -5,9 +5,10 @@ ArduPilot control backend implementation for the public interfaces provided by
 
 ## Status
 
-This repository is an early technical evaluation of body-rate, attitude,
-control-allocation, and EKF3 backends using the pinned ArduCopter 4.6.3 source
-tree.
+This repository implements the ArduPilot Control Link attitude, rate,
+altitude, horizontal-position, allocation, allocation-feedback, and EKF3
+backends using the pinned ArduCopter 4.6.3 source tree. Coupled 3D position
+control is explicitly not provided.
 
 The spike confirms that the existing `IRateControlBackend` contract can host
 ArduPilot rate control without changing the public interface:
@@ -63,8 +64,8 @@ The current scope intentionally excludes:
 
 - integration into the normal `hakoniwa-drone-pro` build
 - redistribution of a binary linked with proprietary components
-- position and allocation-feedback backends
-- multi-lane EKF, runtime EKF reset, optional aiding sensors, and `.parm`
+- coupled 3D position control
+- multi-lane EKF, optional aiding sensors, and `.parm`
   configuration overlays
 - tilted/reversible rotors and ArduPilot failed-motor thrust boost
 
@@ -93,6 +94,7 @@ its tests:
 ```bash
 bash build.bash build
 bash build.bash test
+bash build.bash install
 ```
 
 `build.bash` uses `python3` by default. Select a Python environment containing
@@ -120,7 +122,7 @@ build when the Waf DAL archive is unavailable.
 ## Version pins
 
 - ArduPilot: `Copter-4.6.3` / `92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`
-- Hakoniwa adapter interface: `b58b71a491d074cd8fcb68525e2209a8e3d881d5`
+- Hakoniwa adapter interface: `1814967f7a5410b7b44dd2fe87ba7140f9b0fc3e`
 
 These are Git submodule commits, not floating branch dependencies.
 

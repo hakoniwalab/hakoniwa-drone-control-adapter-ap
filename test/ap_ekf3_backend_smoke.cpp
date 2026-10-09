@@ -111,5 +111,11 @@ int main()
     if (!rejected_stale_imu) {
         return 7;
     }
+    ekf.reset();
+    ekf.push_imu(EkfImuInput{dt_usec, 0.0, 0.0, -9.80665, 0.0, 0.0, 0.0}, dt);
+    ekf.update();
+    if (ekf.get_estimated_state().time_usec != dt_usec) {
+        return 8;
+    }
     return 0;
 }

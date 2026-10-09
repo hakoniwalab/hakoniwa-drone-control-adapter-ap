@@ -6,6 +6,7 @@ readonly project_root="$(cd "$(dirname "$0")" && pwd)"
 readonly ardupilot_root="${project_root}/thirdparty/ardupilot"
 readonly build_root="${project_root}/build"
 readonly action="${1:-build}"
+readonly install_root="${INSTALL_PREFIX:-${project_root}/install}"
 readonly ardupilot_python="${ARDUPILOT_PYTHON:-python3}"
 readonly ardupilot_patch="${project_root}/patches/ardupilot-4.6.3-dal-standalone-zero-imu-offset.patch"
 ardupilot_patch_applied=0
@@ -58,6 +59,8 @@ configure_adapter() {
         -S "${project_root}"
         -B "${build_root}"
         -DBUILD_TESTING=ON
+        -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_INSTALL_PREFIX=${install_root}"
         -DHAKONIWA_AP_ENABLE_EKF3=ON)
     if [[ "$(uname -s)" == "Darwin" ]]; then
         # Waf uses the current macOS SDK version when no deployment target is
@@ -86,8 +89,18 @@ case "${action}" in
         cmake --build "${build_root}"
         ctest --test-dir "${build_root}" --output-on-failure
         ;;
+    clean)
+        cmake -E remove_directory "${build_root}"
+        ;;
+    install)
+        ensure_ardupilot_configured
+        apply_ardupilot_patch
+        configure_adapter
+        cmake --build "${build_root}"
+        cmake --install "${build_root}"
+        ;;
     *)
-        echo "Usage: $0 {ardupilot|build|test}" >&2
+        echo "Usage: $0 {ardupilot|build|clean|test|install}" >&2
         exit 1
         ;;
 esac

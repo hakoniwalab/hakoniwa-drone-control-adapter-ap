@@ -9,14 +9,14 @@
 namespace hakoniwa::drone::control_adapter {
 
 struct ApRateControlAxisConfig {
-    double p{0.0};
-    double i{0.0};
-    double d{0.0};
+    double p{0.135};
+    double i{0.135};
+    double d{0.0036};
     double feed_forward{0.0};
-    double integrator_limit{0.0};
+    double integrator_limit{0.5};
     double target_filter_hz{0.0};
     double error_filter_hz{0.0};
-    double derivative_filter_hz{0.0};
+    double derivative_filter_hz{20.0};
     double slew_rate_max{0.0};
     double slew_rate_tau{1.0};
     double derivative_feed_forward{0.0};
@@ -57,6 +57,7 @@ public:
 
 private:
     class Impl;
+    ApRateControlBackendConfig config_{};
     std::unique_ptr<Impl> impl_;
 };
 

@@ -90,14 +90,11 @@ public:
 
     void reset()
     {
-        // NavEKF3 and AP_DAL are process-wide in ArduPilot 4.6.3. Rebuilding
-        // the EKF object is sufficient before its first successful core
-        // allocation. Runtime reset support is intentionally deferred until
-        // ownership of the upstream core allocation is made explicit.
-        if (initialised_) {
-            throw std::logic_error("ApEkf3Backend runtime reset is not supported yet");
-        }
+        // The DAL singleton remains alive, but NavEKF3 owns and releases its
+        // cores. Recreate the frontend so service-level reset has the same
+        // observable state as a fresh adapter instance.
         ekf_ = std::make_unique<NavEKF3>();
+        initialised_ = false;
         state_ = {};
         current_time_usec_ = 0;
         last_imu_time_usec_ = 0;

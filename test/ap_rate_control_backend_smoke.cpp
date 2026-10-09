@@ -67,6 +67,18 @@ void verifies_saturation_prevents_integrator_growth()
     assert(near(limited.x, 0.1));
 }
 
+void verifies_landed_resets_integrator()
+{
+    adapter::ApRateControlBackendConfig config{};
+    config.roll.p = 0.0; config.roll.i = 1.0; config.roll.integrator_limit = 1.0;
+    adapter::ApRateControlBackend backend(config);
+    adapter::RateControlInput input{}; input.dt_sec = 0.1; input.target.p = 1.0;
+    assert(backend.run(input).x > 0.0);
+    input.landed = true; (void)backend.run(input);
+    input.landed = false; input.target.p = 0.0;
+    assert(near(backend.run(input).x, 0.0));
+}
+
 }  // namespace
 
 int main()
@@ -74,6 +86,7 @@ int main()
     verifies_axis_mapping_and_proportional_control();
     verifies_feed_forward_matches_ardupilot_motor_input_sum();
     verifies_saturation_prevents_integrator_growth();
+    verifies_landed_resets_integrator();
     std::cout << "ap_rate_control_backend_smoke: PASS\n";
     return 0;
 }

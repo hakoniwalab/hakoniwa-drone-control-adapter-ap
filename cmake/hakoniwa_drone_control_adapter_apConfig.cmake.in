@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+if(NOT TARGET ardupilot_dal AND EXISTS "${PACKAGE_PREFIX_DIR}/lib/libAP_DAL_libs.a")
+    add_library(ardupilot_dal STATIC IMPORTED)
+    set_target_properties(ardupilot_dal PROPERTIES
+        IMPORTED_LOCATION "${PACKAGE_PREFIX_DIR}/lib/libAP_DAL_libs.a")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/hakoniwa_drone_control_adapter_apTargets.cmake")
+check_required_components(hakoniwa_drone_control_adapter_ap)

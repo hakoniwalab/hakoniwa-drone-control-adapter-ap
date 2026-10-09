@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "adapter": "ardupilot",
+  "declared_at": "2026-10-09",
+  "capabilities": {
+    "altitude_tilt_compensation": {
+      "value": "backend",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "position_control_3d": {
+      "value": "not_provided",
+      "alternate_responsibility": "AltitudeControl と HorizontalPositionControl の独立stageを使用する",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "attitude_integral": {
+      "value": "none",
+      "alternate_responsibility": "AC_AttitudeControl の角度stageはP制御で、定常偏差はRateControlの積分が吸収する",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "rate_saturation_antiwindup": {
+      "value": "provided",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "allocation_feedback_policy": {
+      "value": "provided",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "torque_unit": {
+      "value": "ardupilot_normalized",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "ekf_adapter": {
+      "value": "not_provided",
+      "alternate_responsibility": "NavEKF3 backendは任意の別ライブラリで、標準AP package targetには含めない",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    },
+    "position_3d_tilt_compensation": {
+      "value": "none",
+      "alternate_responsibility": "PositionControl3Dを提供せず、AltitudeControlが鉛直の傾き補正を行う",
+      "reference": "docs/ardupilot-adapter-impl.md"
+    }
+  }
+}

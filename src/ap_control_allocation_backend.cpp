@@ -51,11 +51,6 @@ double clamp(double value, double low, double high)
 
 void validate_config(const ApControlAllocationBackendConfig& config)
 {
-    if (!std::isfinite(config.hover_thrust)
-        || config.hover_thrust < 0.0
-        || config.hover_thrust > 1.0) {
-        throw std::invalid_argument("ArduPilot allocator hover_thrust must be in [0,1]");
-    }
     if (!std::isfinite(config.throttle_rpy_mix)
         || config.throttle_rpy_mix < 0.0
         || config.throttle_rpy_mix > 1.0) {
@@ -83,15 +78,8 @@ void validate_actuator_contract(const RotorActuatorConfig& actuator)
         || !std::isfinite(actuator.linearization_point)) {
         throw std::invalid_argument("ArduPilot allocator requires finite actuator geometry");
     }
-    if (std::abs(actuator.limit.min) > kGeometryTolerance
-        || std::abs(actuator.limit.max - 1.0) > kGeometryTolerance) {
-        throw std::invalid_argument(
-            "ArduPilot matrix allocator currently requires actuator limits [0,1]");
-    }
-    if (std::abs(actuator.trim) > kGeometryTolerance
-        || std::abs(actuator.linearization_point) > kGeometryTolerance) {
-        throw std::invalid_argument(
-            "ArduPilot matrix allocator does not accept trim or linearization_point");
+    if (actuator.limit.min > actuator.limit.max) {
+        throw std::invalid_argument("ArduPilot allocator actuator minimum exceeds maximum");
     }
 }
 
@@ -174,6 +162,10 @@ ControlAllocationOutput make_empty_output(const ControlAllocationInput& input)
     output.status.unallocated_torque_y = input.command.torque_y;
     output.status.unallocated_torque_z = input.command.torque_z;
     output.status.unallocated_thrust_body_z = input.command.thrust.body_z;
+    output.status.clipped = std::abs(input.command.torque_x) > kEpsilon
+        || std::abs(input.command.torque_y) > kEpsilon
+        || std::abs(input.command.torque_z) > kEpsilon
+        || std::abs(input.command.thrust.body_z) > kEpsilon;
     return output;
 }
 
@@ -213,7 +205,20 @@ ControlAllocationOutput ApControlAllocationBackend::run(
     const double roll_thrust = model.roll_available ? requested_roll : 0.0;
     const double pitch_thrust = model.pitch_available ? requested_pitch : 0.0;
     double yaw_thrust = model.yaw_available ? requested_yaw : 0.0;
-    const double requested_throttle = -input.command.thrust.body_z;
+    // Public thrust is normalized by hover thrust.  The public upper limit is
+    // T_max/T_hover, so its reciprocal is AP's hover fraction.  Allocation
+    // deliberately does not use the configuration-file MOT_THST_HOVER.
+    const double actuator_limit_max = input.actuators[0].limit.max;
+    if (!std::isfinite(actuator_limit_max) || actuator_limit_max <= 0.0) {
+        throw std::invalid_argument("ArduPilot allocator requires a positive actuator maximum");
+    }
+    for (std::size_t i = 1; i < model.count; ++i) {
+        if (std::abs(input.actuators[i].limit.max - actuator_limit_max) > kGeometryTolerance) {
+            throw std::invalid_argument("ArduPilot matrix allocator requires equal actuator maximums");
+        }
+    }
+    const double hover_thrust = 1.0 / actuator_limit_max;
+    const double requested_throttle = -input.command.thrust.body_z * hover_thrust;
     double throttle_thrust = requested_throttle;
     AllocationLimits limits{};
     limits.roll = !model.roll_available && std::abs(requested_roll) > kEpsilon;
@@ -232,7 +237,7 @@ ControlAllocationOutput ApControlAllocationBackend::run(
     double throttle_avg_max = std::max(
         throttle_thrust,
         throttle_thrust * (1.0 - config_.throttle_rpy_mix)
-            + config_.hover_thrust * config_.throttle_rpy_mix);
+            + hover_thrust * config_.throttle_rpy_mix);
     throttle_avg_max = clamp(throttle_avg_max, throttle_thrust, 1.0);
     double throttle_best_rpy = std::min(0.5, throttle_avg_max);
 
@@ -298,19 +303,31 @@ ControlAllocationOutput ApControlAllocationBackend::run(
     result.actuator_commands.count = model.count;
     double output_sum = 0.0;
     for (std::size_t i = 0; i < model.count; ++i) {
-        result.actuator_commands.values[i] = allocated_throttle * model.throttle[i]
+        const double ap_fraction = allocated_throttle * model.throttle[i]
             + rpy_scale * output[i];
-        output_sum += result.actuator_commands.values[i];
+        double hover_units = ap_fraction / hover_thrust;
+        const auto& actuator = input.actuators[i];
+        // Trim and the linearization point are expressed in the same public
+        // hover unit as the output. AP's linear mixer is affine around that
+        // point; their difference is the constant bias at this boundary.
+        hover_units += actuator.trim - actuator.linearization_point;
+        const double limited = clamp(
+            hover_units, actuator.limit.min, actuator.limit.max);
+        if (std::abs(limited - hover_units) > kEpsilon) {
+            result.status.clipped = true;
+        }
+        result.actuator_commands.values[i] = limited;
+        output_sum += limited * hover_thrust;
     }
 
-    result.status.clipped = limits.roll || limits.pitch || limits.yaw
+    result.status.clipped = result.status.clipped || limits.roll || limits.pitch || limits.yaw
         || limits.throttle_lower || limits.throttle_upper;
     result.status.unallocated_torque_x = requested_roll - roll_thrust * rpy_scale;
     result.status.unallocated_torque_y = requested_pitch - pitch_thrust * rpy_scale;
     result.status.unallocated_torque_z = requested_yaw - yaw_thrust * rpy_scale;
     const double allocated_collective = output_sum / static_cast<double>(model.count);
     result.status.unallocated_thrust_body_z =
-        input.command.thrust.body_z + allocated_collective;
+        input.command.thrust.body_z + allocated_collective / hover_thrust;
     return result;
 }
 

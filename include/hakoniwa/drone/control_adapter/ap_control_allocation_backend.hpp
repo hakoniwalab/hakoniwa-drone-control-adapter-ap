@@ -6,7 +6,6 @@
 namespace hakoniwa::drone::control_adapter {
 
 struct ApControlAllocationBackendConfig {
-    double hover_thrust{0.35};
     double throttle_rpy_mix{0.5};
     double yaw_headroom{0.2};
 };

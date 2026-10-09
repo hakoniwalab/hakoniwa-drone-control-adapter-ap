@@ -57,6 +57,57 @@ float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
     return dt / (dt + rc);
 }
 
+float sqrt_controller(float error, float p, float second_ord_lim, float dt)
+{
+    float correction;
+    if (second_ord_lim <= 0.0f) {
+        correction = error * p;
+    } else if (p == 0.0f) {
+        correction = std::copysign(
+            std::sqrt(2.0f * second_ord_lim * std::abs(error)), error);
+    } else {
+        const float linear_dist = second_ord_lim / (p * p);
+        if (error > linear_dist) {
+            correction = std::sqrt(
+                2.0f * second_ord_lim * (error - 0.5f * linear_dist));
+        } else if (error < -linear_dist) {
+            correction = -std::sqrt(
+                2.0f * second_ord_lim * (-error - 0.5f * linear_dist));
+        } else {
+            correction = error * p;
+        }
+    }
+    return dt > 0.0f
+        ? constrain_float(correction, -std::abs(error) / dt, std::abs(error) / dt)
+        : correction;
+}
+
+Vector2f sqrt_controller(
+    const Vector2f& error, float p, float second_ord_lim, float dt)
+{
+    const float length = error.length();
+    return length > 0.0f
+        ? error * (sqrt_controller(length, p, second_ord_lim, dt) / length)
+        : Vector2f{};
+}
+
+float inv_sqrt_controller(float output, float p, float derivative_max)
+{
+    if (derivative_max > 0.0f && p == 0.0f) {
+        return output * output / (2.0f * derivative_max);
+    }
+    if (derivative_max <= 0.0f) {
+        return p != 0.0f ? output / p : 0.0f;
+    }
+    const float linear_velocity = derivative_max / p;
+    if (std::abs(output) < linear_velocity) {
+        return output / p;
+    }
+    const float stopping_dist = 0.5f * derivative_max / (p * p)
+        + output * output / (2.0f * derivative_max);
+    return std::copysign(stopping_dist, output);
+}
+
 template <typename T>
 T constrain_value_line(const T value, const T low, const T high, uint32_t)
 {
@@ -74,6 +125,15 @@ T constrain_value_line(const T value, const T low, const T high, uint32_t)
 
 template float constrain_value_line<float>(float, float, float, uint32_t);
 template double constrain_value_line<double>(double, double, double, uint32_t);
+
+template <typename T>
+float safe_sqrt(const T value)
+{
+    const float result = std::sqrt(static_cast<float>(value));
+    return std::isnan(result) ? 0.0f : result;
+}
+
+template float safe_sqrt<float>(float);
 
 template <typename Arithmetic1, typename Arithmetic2>
 typename std::enable_if<std::is_integral<

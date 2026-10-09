@@ -309,8 +309,7 @@ AngularRateTarget ApAttitudeControlBackend::run(const AttitudeControlInput& inpu
 
     Vec3 desired_body_rate{0.0, 0.0, input.target_yaw_rate_rad_sec};
     limit_angular_rate(desired_body_rate, config_);
-    const Vec3 inertial_feedforward = rotate(desired, desired_body_rate);
-    const Vec3 body_feedforward = rotate(inverse(body) * target, inertial_feedforward);
+    const Vec3 body_feedforward = rotate(inverse(body), desired_body_rate);
 
     status_.thrust_error_angle_rad = thrust_error;
     status_.feedforward_scalar = 1.0;

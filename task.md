@@ -12,7 +12,7 @@ release artifacts must not acquire an ArduPilot dependency.
 ## Version Baseline
 
 - ArduPilot: Copter 4.6.3 (`92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`)
-- Public Hakoniwa interface: `b58b71a491d074cd8fcb68525e2209a8e3d881d5`
+- Public Hakoniwa interface: `1814967f7a5410b7b44dd2fe87ba7140f9b0fc3e`
 - Build target: ArduPilot SITL configuration
 - License: `GPL-3.0-or-later`
 
@@ -35,6 +35,12 @@ another ArduPilot release until its parameter semantics and tests are rerun.
 - [x] Document the local-evaluation and redistribution boundary
 - [x] Prove a minimal in-process NavEKF3 backend with one IMU, GPS, barometer,
   and magnetometer
+- [x] Implement split altitude and horizontal-position backends
+- [x] Implement allocation feedback
+- [x] Add AP-named JSON configuration and loader
+- [x] Add Release build, install target, and CMake package export
+- [ ] Implement coupled `IPositionControl3DBackend` (declared not provided)
+- [ ] Load a complete EKF3 parameter file
 
 ## Implementation Policy
 
@@ -179,7 +185,7 @@ First-evaluation limits are explicit:
 - ArduPilot defaults plus the common magnetic-declination setting; `.parm`
   overlay support is deferred
 - `armed`, `in_air`, and `at_rest` are independent common-interface inputs
-- no runtime reset after NavEKF3 allocates its core
+- runtime reset recreates the NavEKF3 frontend and core
 - no lane switching, GSF yaw, optical flow, rangefinder, visual odometry, or
   hardware sensor drivers
 

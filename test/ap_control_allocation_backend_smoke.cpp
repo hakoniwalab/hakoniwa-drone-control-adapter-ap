@@ -33,10 +33,10 @@ void configure_rotor(
     rotor.geometry.position = {x, y, 0.0};
     rotor.geometry.axis = {0.0, 0.0, -1.0};
     rotor.geometry.moment_ratio = moment_ratio;
-    rotor.limit = {0.0, 1.0};
+    rotor.limit = {0.0, 4.0};
 }
 
-adapter::ControlAllocationInput make_quadx(double throttle = 0.35)
+adapter::ControlAllocationInput make_quadx(double throttle = 1.0)
 {
     adapter::ControlAllocationInput input{};
     input.actuator_count = 4;
@@ -48,7 +48,7 @@ adapter::ControlAllocationInput make_quadx(double throttle = 0.35)
     return input;
 }
 
-adapter::ControlAllocationInput make_hexa(double throttle = 0.35)
+adapter::ControlAllocationInput make_hexa(double throttle = 1.0)
 {
     adapter::ControlAllocationInput input{};
     input.actuator_count = 6;
@@ -73,7 +73,7 @@ void verifies_collective_and_roll_allocation()
     const auto collective = backend.run(make_quadx());
     require(collective.actuator_commands.count == 4, "Quad output count mismatch");
     for (std::size_t i = 0; i < 4; ++i) {
-        require(near(collective.actuator_commands.values[i], 0.35),
+        require(near(collective.actuator_commands.values[i], 1.0),
             "Quad collective output mismatch");
     }
     require(!collective.status.clipped, "Nominal collective should not clip");
@@ -81,13 +81,13 @@ void verifies_collective_and_roll_allocation()
     auto input = make_quadx();
     input.command.torque_x = 0.2;
     const auto roll = backend.run(input);
-    require(near(roll.actuator_commands.values[0], 0.25),
+    require(near(roll.actuator_commands.values[0], 0.15 / 0.25),
         "Unexpected Quad/X motor 0 roll output");
-    require(near(roll.actuator_commands.values[1], 0.45),
+    require(near(roll.actuator_commands.values[1], 0.35 / 0.25),
         "Unexpected Quad/X motor 1 roll output");
-    require(near(roll.actuator_commands.values[2], 0.45),
+    require(near(roll.actuator_commands.values[2], 0.35 / 0.25),
         "Unexpected Quad/X motor 2 roll output");
-    require(near(roll.actuator_commands.values[3], 0.25),
+    require(near(roll.actuator_commands.values[3], 0.15 / 0.25),
         "Unexpected Quad/X motor 3 roll output");
 }
 
@@ -97,7 +97,7 @@ void verifies_hexa_and_yaw_desaturation()
     const auto collective = backend.run(make_hexa());
     require(collective.actuator_commands.count == 6, "Hexa output count mismatch");
     for (std::size_t i = 0; i < 6; ++i) {
-        require(near(collective.actuator_commands.values[i], 0.35),
+        require(near(collective.actuator_commands.values[i], 1.0),
             "Hexa collective output mismatch");
     }
 
@@ -109,8 +109,8 @@ void verifies_hexa_and_yaw_desaturation()
         "Yaw clipping must report positive unallocated torque");
     for (std::size_t i = 0; i < 6; ++i) {
         require(yaw.actuator_commands.values[i] >= 0.0
-                && yaw.actuator_commands.values[i] <= 1.0,
-            "Desaturated Hexa output must remain in [0,1]");
+                && yaw.actuator_commands.values[i] <= 4.0,
+            "Desaturated Hexa output must remain in caller limits");
     }
 }
 
@@ -126,6 +126,31 @@ void verifies_missing_axis_authority_is_reported()
     require(output.status.clipped, "Missing yaw authority must report clipping");
     require(near(output.status.unallocated_torque_z, 0.4),
         "Missing yaw authority must remain fully unallocated");
+}
+
+void verifies_run_input_limits_trim_and_linearization()
+{
+    adapter::ApControlAllocationBackend backend;
+    auto input = make_quadx();
+    for (std::size_t i = 0; i < input.actuator_count; ++i) {
+        input.actuators[i].limit.max = 2.0;
+    }
+    const auto hover = backend.run(input);
+    for (std::size_t i = 0; i < input.actuator_count; ++i) {
+        require(near(hover.actuator_commands.values[i], 1.0),
+            "Hover output must be derived from the run input maximum");
+    }
+
+    input.command = {};
+    input.actuators[0].trim = 0.3;
+    input.actuators[0].linearization_point = 0.1;
+    const auto biased = backend.run(input);
+    require(near(biased.actuator_commands.values[0], 0.2),
+        "Trim and linearization point must be applied from the run input");
+    for (std::size_t i = 1; i < input.actuator_count; ++i) {
+        require(near(biased.actuator_commands.values[i], 0.0),
+            "Run input affine bias must not affect other actuators");
+    }
 }
 
 void verifies_ardupilot_463_contract_guards()
@@ -156,7 +181,7 @@ void verifies_desaturation_range_over_command_grid()
 {
     adapter::ApControlAllocationBackend backend;
     constexpr double commands[] = {-1.5, -0.5, 0.0, 0.5, 1.5};
-    constexpr double throttles[] = {-0.2, 0.0, 0.35, 0.8, 1.2};
+    constexpr double throttles[] = {-0.2, 0.0, 1.0, 2.0, 3.0};
     for (double throttle : throttles) {
         for (double roll : commands) {
             for (double pitch : commands) {
@@ -168,8 +193,8 @@ void verifies_desaturation_range_over_command_grid()
                     const auto output = backend.run(input);
                     for (std::size_t i = 0; i < output.actuator_commands.count; ++i) {
                         require(output.actuator_commands.values[i] >= -1e-9
-                                && output.actuator_commands.values[i] <= 1.0 + 1e-9,
-                            "ArduPilot desaturation command escaped [0,1]");
+                                && output.actuator_commands.values[i] <= 4.0 + 1e-9,
+                            "ArduPilot desaturation command escaped caller limits");
                     }
                 }
             }
@@ -184,6 +209,7 @@ int main()
     verifies_collective_and_roll_allocation();
     verifies_hexa_and_yaw_desaturation();
     verifies_missing_axis_authority_is_reported();
+    verifies_run_input_limits_trim_and_linearization();
     verifies_ardupilot_463_contract_guards();
     verifies_desaturation_range_over_command_grid();
     std::cout << "ap_control_allocation_backend_smoke: PASS\n";

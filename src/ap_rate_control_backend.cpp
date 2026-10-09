@@ -101,9 +101,8 @@ public:
 };
 
 ApRateControlBackend::ApRateControlBackend(const ApRateControlBackendConfig& config)
-    : impl_(std::make_unique<Impl>(config))
 {
-    reset();
+    set_config(config);
 }
 
 ApRateControlBackend::~ApRateControlBackend() = default;
@@ -124,7 +123,16 @@ BodyTorqueCommand ApRateControlBackend::run(const RateControlInput& input)
         throw std::invalid_argument("ArduPilot rate control requires dt_sec > 0");
     }
 
-    return BodyTorqueCommand{
+    if (input.landed) {
+        // AC_AttitudeControl resets its rate integrators while the vehicle is
+        // landed. Keep the output proportional/feed-forward but never retain
+        // ground error for the next airborne cycle.
+        impl_->roll.reset_I();
+        impl_->pitch.reset_I();
+        impl_->yaw.reset_I();
+    }
+
+    const BodyTorqueCommand output{
         run_axis(
             impl_->roll,
             input.target.p,
@@ -144,10 +152,17 @@ BodyTorqueCommand ApRateControlBackend::run(const RateControlInput& input)
             input.dt_sec,
             input.saturation.yaw)
     };
+    if (input.landed) {
+        impl_->roll.reset_I();
+        impl_->pitch.reset_I();
+        impl_->yaw.reset_I();
+    }
+    return output;
 }
 
 void ApRateControlBackend::set_config(const ApRateControlBackendConfig& config)
 {
+    config_ = config;
     impl_ = std::make_unique<Impl>(config);
     reset();
 }
