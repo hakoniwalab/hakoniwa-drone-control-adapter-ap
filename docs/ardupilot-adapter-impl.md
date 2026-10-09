@@ -28,3 +28,19 @@ Full `AC_PosControl` is not instantiated because its constructor requires the
 vehicle AHRS, inertial navigation, motors, attitude controller, scheduler, and
 parameter store. The controller primitives are linked directly; only the
 vehicle-dependent stage orchestration is extracted.
+
+## Sensor filters (plugin)
+
+ArduPilot filters the IMU before its controllers see it (`AP_InertialSensor`, `INS_GYRO_FILTER` 20 Hz and
+`INS_ACCEL_FILTER` 10 Hz by default). Drone PRO hands the adapter the unfiltered rate and acceleration, so the
+plugin (`plugin/ap_sensor_filters.hpp`) applies the same second-order Butterworth low-pass (the coefficients of
+`libraries/Filter/LowPassFilter2p.cpp`) to the rate-control input, sampled at `runtime.rate_hz`, and to the vertical
+acceleration of the altitude and 3D position control, sampled at `runtime.altitude_hz`. The keys are optional in the
+adapter configuration; absent or 0 means no filter (the contract-test configuration).
+
+## Attitude acceleration limits
+
+`ATC_ACCEL_R_MAX`, `ATC_ACCEL_P_MAX` and `ATC_ACCEL_Y_MAX` (centidegrees/s^2) feed the attitude-error-to-rate sqrt
+controller, which clamps the limit into 40..720 deg/s^2 as `AC_AttitudeControl` does. The configuration loader
+therefore gives an absent key ArduPilot's default (110000, 110000, 27000) rather than 0, which the clamp would turn
+into a sluggish 40 deg/s^2.

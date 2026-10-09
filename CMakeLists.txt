@@ -181,6 +181,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/hakoniwa_drone_control_adapter_apConfi
     DESTINATION lib/cmake/hakoniwa_drone_control_adapter_ap)
 
 if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME ardupilot_python_tools
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_CURRENT_SOURCE_DIR}/test -p test_*.py)
+
     add_executable(ap_contract_smoke test/ap_contract_smoke.cpp)
     target_link_libraries(ap_contract_smoke PRIVATE hakoniwa_drone_control_adapter_ap)
     add_test(NAME ap_contract_smoke COMMAND ap_contract_smoke
@@ -205,6 +210,23 @@ if(BUILD_TESTING)
         PRIVATE hakoniwa_drone_control_adapter_ap)
     add_test(NAME ap_rate_control_backend_smoke
         COMMAND ap_rate_control_backend_smoke)
+
+    add_executable(ap_position_control_backends_smoke
+        test/ap_position_control_backends_smoke.cpp)
+    target_link_libraries(ap_position_control_backends_smoke
+        PRIVATE hakoniwa_drone_control_adapter_ap)
+    add_test(NAME ap_position_control_backends_smoke
+        COMMAND ap_position_control_backends_smoke)
+
+    add_executable(ap_sensor_filters_smoke test/ap_sensor_filters_smoke.cpp)
+    target_include_directories(ap_sensor_filters_smoke PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugin)
+    target_link_libraries(ap_sensor_filters_smoke PRIVATE
+        hakoniwa_drone_control_adapter_ap ${CMAKE_DL_LIBS})
+    add_dependencies(ap_sensor_filters_smoke hakoniwa_drone_control_adapter_ap_plugin)
+    add_test(NAME ap_sensor_filters_smoke COMMAND ap_sensor_filters_smoke
+        $<TARGET_FILE:hakoniwa_drone_control_adapter_ap_plugin>
+        ${CMAKE_CURRENT_SOURCE_DIR}/config/ardupilot-controller-config.json)
 
     if(HAKONIWA_AP_ENABLE_EKF3)
         add_executable(ap_ekf3_backend_smoke

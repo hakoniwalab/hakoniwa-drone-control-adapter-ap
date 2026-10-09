@@ -10,6 +10,10 @@ double number(const std::string& s, const char* key) {
     if (!std::regex_search(s,m,r)) throw std::runtime_error(std::string("missing required config key: ")+key);
     return std::stod(m[1].str());
 }
+double optional_number(const std::string& s, const char* key, double fallback) {
+    std::smatch m; const std::regex r("\\\"" + std::string(key) + "\\\"\\s*:\\s*([-+]?(?:\\d+\\.?\\d*|\\d*\\.\\d+)(?:[eE][-+]?\\d+)?)");
+    return std::regex_search(s,m,r) ? std::stod(m[1].str()) : fallback;
+}
 }
 ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_file(const std::string& path) const {
     std::ifstream f(path); if (!f) throw std::runtime_error("failed to open config file: "+path);
@@ -19,8 +23,16 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     ArdupilotControllerConfig c{};
     c.runtime.altitude_hz=number(s,"altitude_hz"); c.runtime.horizontal_hz=number(s,"horizontal_hz");
     c.runtime.attitude_hz=number(s,"attitude_hz"); c.runtime.rate_hz=number(s,"rate_hz");
+    c.sensor_filter.gyro_cutoff_hz=optional_number(s,"INS_GYRO_FILTER",0.0); c.sensor_filter.accel_cutoff_hz=optional_number(s,"INS_ACCEL_FILTER",0.0);
     const double hover=number(s,"MOT_THST_HOVER"); c.altitude_control.hover_thrust=hover;
     c.attitude_control.angle_roll_p=number(s,"ATC_ANG_RLL_P"); c.attitude_control.angle_pitch_p=number(s,"ATC_ANG_PIT_P"); c.attitude_control.angle_yaw_p=number(s,"ATC_ANG_YAW_P");
+    // ATC_ACCEL_*_MAX (centidegrees/s^2, ArduPilot defaults AC_ATTITUDE_CONTROL_ACCEL_RP/Y_MAX_DEFAULT_CDSS): the
+    // attitude-error-to-rate sqrt controller clamps the limit into 40..720 deg/s^2, so an absent key must give
+    // ArduPilot's default and not 0 (0 would be clamped to 40 deg/s^2, a sluggish vehicle).
+    const double cdss_to_rad=3.14159265358979323846/18000.0;
+    c.attitude_control.accel_roll_max_rad_sec2=optional_number(s,"ATC_ACCEL_R_MAX",110000.0)*cdss_to_rad;
+    c.attitude_control.accel_pitch_max_rad_sec2=optional_number(s,"ATC_ACCEL_P_MAX",110000.0)*cdss_to_rad;
+    c.attitude_control.accel_yaw_max_rad_sec2=optional_number(s,"ATC_ACCEL_Y_MAX",27000.0)*cdss_to_rad;
     c.altitude_control.position_p=number(s,"PSC_POSZ_P"); c.altitude_control.velocity_p=number(s,"PSC_VELZ_P"); c.altitude_control.velocity_i=number(s,"PSC_VELZ_I"); c.altitude_control.velocity_d=number(s,"PSC_VELZ_D"); c.altitude_control.velocity_imax_mps2=number(s,"PSC_VELZ_IMAX"); c.altitude_control.velocity_filter_hz=number(s,"PSC_VELZ_FLTE"); c.altitude_control.velocity_derivative_filter_hz=number(s,"PSC_VELZ_FLTD"); c.altitude_control.velocity_feed_forward=number(s,"PSC_VELZ_FF");
     c.altitude_control.acceleration_p=number(s,"PSC_ACCZ_P"); c.altitude_control.acceleration_i=number(s,"PSC_ACCZ_I"); c.altitude_control.acceleration_d=number(s,"PSC_ACCZ_D"); c.altitude_control.acceleration_imax=number(s,"PSC_ACCZ_IMAX"); c.altitude_control.acceleration_target_filter_hz=number(s,"PSC_ACCZ_FLTT"); c.altitude_control.acceleration_error_filter_hz=number(s,"PSC_ACCZ_FLTE"); c.altitude_control.acceleration_derivative_filter_hz=number(s,"PSC_ACCZ_FLTD"); c.altitude_control.acceleration_feed_forward=number(s,"PSC_ACCZ_FF"); c.altitude_control.speed_up_mps=number(s,"WPNAV_SPEED_UP"); c.altitude_control.speed_down_mps=number(s,"WPNAV_SPEED_DN"); c.altitude_control.acceleration_max_mps2=number(s,"WPNAV_ACCEL_Z"); c.altitude_control.jerk_max_mps3=number(s,"PSC_JERK_Z");
     c.horizontal_control.position_p=number(s,"PSC_POSXY_P"); c.horizontal_control.velocity_p=number(s,"PSC_VELXY_P"); c.horizontal_control.velocity_i=number(s,"PSC_VELXY_I"); c.horizontal_control.velocity_d=number(s,"PSC_VELXY_D"); c.horizontal_control.velocity_feed_forward=number(s,"PSC_VELXY_FF"); c.horizontal_control.velocity_imax_mps2=number(s,"PSC_VELXY_IMAX"); c.horizontal_control.velocity_error_filter_hz=number(s,"PSC_VELXY_FLTE"); c.horizontal_control.velocity_derivative_filter_hz=number(s,"PSC_VELXY_FLTD"); c.horizontal_control.speed_max_mps=number(s,"PSC_VELXY_MAX"); c.horizontal_control.acceleration_max_mps2=number(s,"PSC_ACCXY_MAX"); c.horizontal_control.jerk_max_mps3=number(s,"PSC_JERK_XY"); c.horizontal_control.angle_max_rad=number(s,"ANGLE_MAX_RAD");

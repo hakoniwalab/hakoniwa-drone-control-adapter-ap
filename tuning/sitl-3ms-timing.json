@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "description": "ArduPilot SITL period (3 ms). ArduCopter runs its rate, attitude and position controllers in every main loop (FAST_TASK in ArduCopter/Copter.cpp); in SITL the main loop runs once per sensor frame, 3 ms with the Hakoniwa physics step (333 Hz). Every Hakoniwa control cycle is therefore 3 ms, unlike PX4 (attitude 6 ms, outer loops 21 ms). Vehicle independent. Pass to create-pid-tuning-profile.bash --timing-profile.",
+  "simulation_time_step_sec": 0.003,
+  "ekf_imu_interval_usec": 3000,
+  "controller_cycles": {
+    "PID_ALT_CONTROL_CYCLE": 0.003,
+    "POS_CONTROL_CYCLE": 0.003,
+    "SPD_CONTROL_CYCLE": 0.003,
+    "ANGULAR_CONTROL_CYCLE": 0.003,
+    "ANGULAR_RATE_CONTROL_CYCLE": 0.003
+  }
+}

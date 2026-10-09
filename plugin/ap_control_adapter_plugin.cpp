@@ -8,6 +8,7 @@
 #include "hakoniwa/drone/control_adapter/ap_allocation_feedback_policy.hpp"
 #include "hakoniwa/drone/control_adapter/ap_position_control_3d_backend.hpp"
 #include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
+#include "ap_sensor_filters.hpp"
 #ifdef HAKO_AP_PLUGIN_WITH_EKF3
 #include "hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp"
 #endif
@@ -26,6 +27,7 @@
 namespace {
 
 namespace adapter = hakoniwa::drone::control_adapter;
+namespace filters = hakoniwa::drone::control_adapter::plugin_filters;
 using adapter::plugin::BackendKind;
 
 constexpr double kPi = 3.14159265358979323846;
@@ -186,12 +188,20 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
     const auto& config = static_cast<Context*>(context)->config;
     try {
         switch (kind) {
+        // The sensor filters (INS_GYRO_FILTER, INS_ACCEL_FILTER) wrap the stages
+        // that read the IMU, as AP_InertialSensor does before ArduPilot's controllers.
         case BackendKind::RateControl:
+            if (config.sensor_filter.gyro_cutoff_hz > 0.0) {
+                return static_cast<adapter::IRateControlBackend*>(new filters::FilteredRateControl(config));
+            }
             return static_cast<adapter::IRateControlBackend*>(new adapter::ApRateControlBackend(config.rate_control));
         case BackendKind::AttitudeControl:
             return static_cast<adapter::IAttitudeControlBackend*>(
                 new adapter::ApAttitudeControlBackend(config.attitude_control));
         case BackendKind::AltitudeControl:
+            if (config.sensor_filter.accel_cutoff_hz > 0.0) {
+                return static_cast<adapter::IAltitudeControlBackend*>(new filters::FilteredAltitudeControl(config));
+            }
             return static_cast<adapter::IAltitudeControlBackend*>(
                 new adapter::ApAltitudeControlBackend(config.altitude_control));
         case BackendKind::HorizontalPositionControl:
@@ -215,6 +225,9 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
 #endif
         }
         case BackendKind::PositionControl3D:
+            if (config.sensor_filter.accel_cutoff_hz > 0.0) {
+                return static_cast<adapter::IPositionControl3DBackend*>(new filters::FilteredPositionControl3D(config));
+            }
             return static_cast<adapter::IPositionControl3DBackend*>(
                 new adapter::ApPositionControl3DBackend(config.altitude_control, config.horizontal_control));
         }

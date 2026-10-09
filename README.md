@@ -119,6 +119,26 @@ so the pinned ArduPilot submodule remains clean. Plain CMake configuration keeps
 `HAKONIWA_AP_ENABLE_EKF3=OFF` by default; this preserves the pre-EKF controller
 build when the Waf DAL archive is unavailable.
 
+## PID tuning and SITL (Drone PRO)
+
+The adapter is tuned with Drone PRO's `plugin` tuning profile under the conditions of ArduPilot SITL, and the
+result is exported as ArduPilot parameters for ArduCopter running as its own process. The procedure is in Drone
+PRO's `pro-docs/control-link/ardupilot/` (`pid-tuning-procedure.md`, `sitl.md`). This repository holds the
+ArduPilot-specific parts:
+
+| File | Purpose |
+|---|---|
+| `tuning/sitl-3ms-timing.json` | Timing profile: every Hakoniwa control cycle 3 ms, as ArduCopter's main loop in SITL |
+| `tuning/profile-overrides.json` | EKF wait (+32 s), ArduPilot search ranges (rate P 0.05..0.5, rate I searched in hover) and hard gates (yaw phase 90 deg) |
+| `tuning/export_ardupilot_params.py` | Tuning result -> ArduPilot parameters (`ATC_*`, `PSC_*`, limits, `MOT_THST_HOVER/EXPO`, frame) |
+| `tools/build-sitl.bash` | Builds `arducopter` with MAVLink from the pinned ArduPilot (separate waf output) |
+| `tools/setup_sitl_runtime.py` | Makes a SITL runtime: exported parameters, SITL-only parameters, the vehicle for Drone PRO's aircraft service, launch scripts |
+
+The adapter configuration used for tuning carries ArduPilot's sensor filters (`INS_GYRO_FILTER`, `INS_ACCEL_FILTER`)
+and attitude acceleration limits (`ATC_ACCEL_*_MAX`, ArduPilot defaults when absent), so the tuned gains hold in SITL.
+Verified on EAMS (9 kg hexa, 2026-10-09): five tuning phases pass, and ArduPilot SITL flies takeoff, goto and land
+with the exported parameters unchanged.
+
 ## Version pins
 
 - ArduPilot: `Copter-4.6.3` / `92b0cd788ec29406f26c6f9c31d5ceedbd1cc538`

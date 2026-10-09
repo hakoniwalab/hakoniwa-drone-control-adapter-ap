@@ -1,5 +1,53 @@
 {
   "schema_version": 1,
-  "description": "ArduPilot adapter overrides for a px4-ekf-flow (plugin) PID tuning profile. The search ranges are the PX4 ones; only the EKF wait differs: NavEKF3 is ready ~33 s after start (ArduPilot's GPS checks), PX4's EKF2 ~10 s.",
-  "ekf_ready_extra_sec": 32.0
+  "description": "ArduPilot adapter overrides for a px4-ekf-flow (plugin) PID tuning profile. EKF: NavEKF3 is ready ~33 s after start (ArduPilot's GPS checks), PX4's EKF2 ~10 s. Search ranges: with ArduPilot's gyro low-pass (INS_GYRO_FILTER) the rate loop is stable only with a small rate P (ArduPilot's default 0.135), and a static trim must be removed by the rate integrator (ArduPilot's convention I = P), so the hover phase searches the rate I too. Yaw, altitude and horizontal keep the PX4 ranges (the yaw loop needs the PX4 rate P range to meet the 0.5 Hz phase gate). Hard gates: ArduPilot's yaw loop is shaped more slowly by design (ATC_ACCEL_Y_MAX, yaw rate filters): with ArduPilot's default gains the 0.5 Hz yaw phase lag is 77 deg (EAMS, 3 ms), so the angle gate is 90 deg instead of PX4's 50.",
+  "ekf_ready_extra_sec": 32.0,
+  "search_space": {
+    "hover": {
+      "PID_ROLL_Kp": {
+        "min": 0.5,
+        "max": 8.0,
+        "step": 0.25
+      },
+      "PID_ROLL_RATE_Kp": {
+        "min": 0.05,
+        "max": 0.5,
+        "step": 0.05
+      },
+      "PID_ROLL_RATE_Ki": {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05
+      }
+    },
+    "angle": {
+      "PID_ROLL_Kp": {
+        "min": 0.5,
+        "max": 8.0,
+        "step": 0.25
+      },
+      "PID_ROLL_RATE_Kp": {
+        "min": 0.05,
+        "max": 0.5,
+        "step": 0.05
+      },
+      "PID_ROLL_RATE_Ki": {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05
+      },
+      "PID_ROLL_RATE_Kd": {
+        "min": 0.0,
+        "max": 0.02,
+        "step": 0.005
+      }
+    }
+  },
+  "hard_gates": {
+    "angle": {
+      "yaw_sine_0p5_phase": {
+        "value": 90.0
+      }
+    }
+  }
 }
