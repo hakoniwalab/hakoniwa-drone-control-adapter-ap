@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Export a Drone PRO PID tuning result as ArduPilot parameters (a .parm file).
 
 The ArduPilot counterpart of Drone PRO's tuning/px4/tools/export_px4_params.py:
@@ -31,6 +32,9 @@ import math
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tuning/ (also when imported as a module)
+from ardupilot_vehicle import SPIN_MAX, SPIN_MIN, motor_thrust_model  # noqa: E402
 
 # Hakoniwa PID_* -> ArduPilot (ArduCopter/Parameters.cpp: ATC_ = AC_AttitudeControl,
 # PSC = AC_PosControl; AC_PosControl.cpp: _POSZ_, _VELZ_, _ACCZ_, _POSXY_, _VELXY_).
@@ -69,8 +73,8 @@ ADAPTER_CONFIG_PASSTHROUGH = (
     "PSC_VELZ_IMAX", "PSC_VELZ_FLTE", "PSC_VELZ_FLTD", "PSC_VELZ_FF",
     "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_ACCZ_D", "PSC_ACCZ_IMAX", "PSC_ACCZ_FLTT", "PSC_ACCZ_FLTE", "PSC_ACCZ_FLTD", "PSC_ACCZ_FF",
     "PSC_VELXY_IMAX", "PSC_VELXY_FLTE", "PSC_VELXY_FLTD", "PSC_VELXY_FF",
-    "PSC_JERK_XY", "PSC_JERK_Z",
-    "ATC_ACCEL_R_MAX", "ATC_ACCEL_P_MAX", "ATC_ACCEL_Y_MAX", "ATC_INPUT_TC",
+    "PSC_JERK_XY", "PSC_JERK_Z", "EK3_HGT_DELAY",
+    "ATC_ACCEL_R_MAX", "ATC_ACCEL_P_MAX", "ATC_ACCEL_Y_MAX", "ATC_INPUT_TC", "ATC_RATE_FF_ENAB", "ATC_SLEW_YAW",
 )
 # The adapter configuration keeps these in SI (m/s^2, thrust 0..1); ArduPilot's are cm/s^2
 # (PSC_VEL*_IMAX) and 0.001 thrust (PSC_ACCZ_IMAX, AC_PosControl _pid_accel_z).
@@ -78,9 +82,9 @@ ADAPTER_CONFIG_SCALE = {"PSC_VELZ_IMAX": 100.0, "PSC_VELXY_IMAX": 100.0, "PSC_AC
 # Frame from the rotor count (AP_MotorsMatrix FRAME_CLASS; FRAME_TYPE 1 = X).
 FRAME_CLASS_BY_ROTORS = {4: 1, 6: 2, 8: 3}
 RPM_TO_DEG_PER_SEC = 360.0 / 60.0
-# ArduPilot defaults (AP_MotorsMulticopter.h); exported so the thrust curve fit holds
-SPIN_MIN = 0.15
-SPIN_MAX = 0.95
+# Share of the tilt-limited horizontal acceleration the target trajectory may plan
+PLANNED_ACCEL_SHARE = 0.5
+GRAVITY = 9.80665
 
 
 def parse_param_text(path: Path) -> dict[str, float]:
@@ -166,6 +170,10 @@ def main() -> int:
     for name in ADAPTER_CONFIG_PASSTHROUGH:
         if name in adapter_params:
             out[name] = float(adapter_params[name]) * ADAPTER_CONFIG_SCALE.get(name, 1.0)
+    # The GPS delay the EKF allowed for (the vehicle's GPS delay). ArduPilot reads GPS1_DELAY_MS 0 as
+    # "the driver's default" (u-blox 120 or 220 ms), so a delay under 1 ms is written as 1.
+    if "GPS1_DELAY_MS" in adapter_params:
+        out["GPS1_DELAY_MS"] = float(max(1, round(float(adapter_params["GPS1_DELAY_MS"]))))
 
     # 3. Vehicle limits (Hakoniwa units -> ArduPilot units)
     #    ATC_RATE_*_MAX deg/s, ANGLE_MAX centidegrees, WPNAV_*/LOIT_* cm/s and cm/s^2
@@ -183,9 +191,18 @@ def main() -> int:
     out["PILOT_SPEED_UP"] = vertical_speed
     if "WPNAV_ACCEL_Z" in adapter_params:
         out["WPNAV_ACCEL_Z"] = float(adapter_params["WPNAV_ACCEL_Z"]) * 100.0
-    if "PSC_ACCXY_MAX" in adapter_params:
-        out["WPNAV_ACCEL"] = float(adapter_params["PSC_ACCXY_MAX"]) * 100.0
-        out["LOIT_ACC_MAX"] = out["WPNAV_ACCEL"]
+    # Horizontal acceleration of the target trajectory (GUIDED shapes position targets with
+    # WPNAV_ACCEL, ArduCopter/mode_guided.cpp; LOITER with LOIT_ACC_MAX). It comes from the
+    # vehicle's tilt limit, not from the adapter configuration: a plan above g*tan(ANGLE_MAX)
+    # cannot be flown, the lean saturates and the velocity loop overshoots (EAMS: 5 m/s^2 with a
+    # 25 deg limit oscillated to 53 deg). Half of it is planned; the other half stays for the
+    # velocity and position correction. EAMS: 2.29 m/s^2 (ArduPilot's default WPNAV_ACCEL 2.5).
+    tilt_accel = GRAVITY * math.tan(math.radians(angle_max_deg))
+    planned_accel = tilt_accel * PLANNED_ACCEL_SHARE
+    out["WPNAV_ACCEL"] = planned_accel * 100.0
+    out["LOIT_ACC_MAX"] = planned_accel * 100.0
+    notes.append(f"WPNAV_ACCEL=LOIT_ACC_MAX={planned_accel:.3g} m/s^2: {PLANNED_ACCEL_SHARE:g} of the tilt limit "
+                 f"g*tan({angle_max_deg:g} deg)={tilt_accel:.3g} m/s^2")
 
     # 4. Vehicle: frame, hover thrust and thrust curve from the Hakoniwa rotor model.
     #    ArduPilot output chain (AP_MotorsMulticopter): thrust fraction t (0..1 of the
@@ -204,23 +221,12 @@ def main() -> int:
     out["MOT_PWM_MAX"] = 2000
     out["MOT_SPIN_MIN"] = SPIN_MIN
     out["MOT_SPIN_MAX"] = SPIN_MAX
-    _, hover, _ = compute_hover_thrust_fraction(drone_config, controller_params)
-    inputs = hover["inputs"]
-    k, r, cq, d, v_bat = inputs["K"], inputs["R"], inputs["Cq"], inputs["D"], inputs["NominalVoltage"]
-    omega_max = hover["omega_max_effective"]
-    hover_duty = hover["hover_duty"]
-    a_coef, b_coef = cq * r / k, k + d * r / k
-
-    def thrust_at_duty(duty: float) -> float:  # relative to the thrust at omega_max
-        omega = (-b_coef + math.sqrt(b_coef * b_coef + 4.0 * a_coef * v_bat * duty)) / (2.0 * a_coef) if a_coef > 0 else v_bat * duty / b_coef
-        return min(omega, omega_max) ** 2 / omega_max ** 2
-
-    if not SPIN_MIN < hover_duty < SPIN_MAX:
-        raise SystemExit(f"ERROR: hover duty {hover_duty:.3f} is outside MOT_SPIN_MIN..MOT_SPIN_MAX ({SPIN_MIN}..{SPIN_MAX})")
-    thrust_hover = thrust_at_duty(hover_duty) / thrust_at_duty(SPIN_MAX)  # ArduPilot's fraction of its maximum
-    curve_hover = (hover_duty - SPIN_MIN) / (SPIN_MAX - SPIN_MIN)
-    raw_expo = (thrust_hover - curve_hover) / (curve_hover * curve_hover - curve_hover)
-    expo = min(1.0, max(0.0, raw_expo))
+    try:
+        model = motor_thrust_model(drone_config, controller_params, compute_hover_thrust_fraction)
+    except ValueError as error:
+        raise SystemExit(f"ERROR: {error}")
+    hover_duty, thrust_hover = model["hover_duty"], model["thrust_hover"]
+    expo, raw_expo = model["expo"], model["raw_expo"]
     out["MOT_THST_HOVER"] = thrust_hover
     out["MOT_THST_EXPO"] = expo
     notes.append(

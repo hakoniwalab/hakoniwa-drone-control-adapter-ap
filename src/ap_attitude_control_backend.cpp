@@ -225,6 +225,50 @@ double correction_rate(
         error, p, std::clamp(acceleration * 0.5, min_acceleration, max_acceleration), dt);
 }
 
+// AC_AttitudeControl::thrust_vector_rotation_angles, without the yaw-error limit:
+// the rotation from `from` to `to` as thrust-vector (x, y) and heading (z) angles in `from`'s frame.
+Vec3 thrust_heading_error(const Quat& from, const Quat& to)
+{
+    const Vec3 thrust_up{0.0, 0.0, -1.0};
+    const Vec3 to_thrust = rotate(to, thrust_up);
+    const Vec3 from_thrust = rotate(from, thrust_up);
+    Vec3 axis = cross(from_thrust, to_thrust);
+    const double angle = std::acos(std::clamp(dot(from_thrust, to_thrust), -1.0, 1.0));
+    const double length = norm(axis);
+    axis = (length <= epsilon || angle <= epsilon) ? thrust_up : axis * (1.0 / length);
+    axis = rotate(inverse(from), axis);
+    const Quat thrust_correction = from_axis_angle(axis, angle);
+    const Vec3 rotation = to_axis_angle(thrust_correction);
+    const Quat heading_correction = inverse(thrust_correction) * inverse(from) * to;
+    return {rotation.x, rotation.y, to_axis_angle(heading_correction).z};
+}
+
+// AC_AttitudeControl::input_shaping_ang_vel
+double input_shaping_ang_vel(double target_ang_vel, double desired_ang_vel, double accel_max, double dt, double input_tc)
+{
+    if (input_tc > 0.0) {
+        const double error_rate = desired_ang_vel - target_ang_vel;
+        const double desired_ang_accel = sqrt_controller(error_rate, 1.0 / std::max(input_tc, 0.01), 0.0, dt);
+        desired_ang_vel = target_ang_vel + desired_ang_accel * dt;
+    }
+    if (accel_max > 0.0) {
+        const double delta = accel_max * dt;
+        return std::clamp(desired_ang_vel, target_ang_vel - delta, target_ang_vel + delta);
+    }
+    return desired_ang_vel;
+}
+
+// AC_AttitudeControl::input_shaping_angle
+double input_shaping_angle(double error_angle, double input_tc, double accel_max, double target_ang_vel,
+                           double desired_ang_vel, double max_ang_vel, double dt)
+{
+    desired_ang_vel += sqrt_controller(error_angle, 1.0 / std::max(input_tc, 0.01), accel_max, dt);
+    if (max_ang_vel > 0.0) {
+        desired_ang_vel = std::clamp(desired_ang_vel, -max_ang_vel, max_ang_vel);
+    }
+    return input_shaping_ang_vel(target_ang_vel, desired_ang_vel, accel_max, dt, 0.0);
+}
+
 }  // namespace
 
 ApAttitudeControlBackend::ApAttitudeControlBackend(
@@ -236,6 +280,8 @@ ApAttitudeControlBackend::ApAttitudeControlBackend(
 void ApAttitudeControlBackend::reset()
 {
     status_ = {};
+    shaping_started_ = false;
+    ang_vel_target_x_ = ang_vel_target_y_ = ang_vel_target_z_ = 0.0;
 }
 
 AngularRateTarget ApAttitudeControlBackend::run(const AttitudeControlInput& input)
@@ -250,8 +296,43 @@ AngularRateTarget ApAttitudeControlBackend::run(const AttitudeControlInput& inpu
     }
 
     const Quat body = normalize(input.attitude);
-    const Quat desired = normalize(input.target_attitude);
-    Quat target = desired;
+    Quat target = normalize(input.target_attitude);
+    // Earth-frame angular velocity fed forward: the shaped target's, or the commanded yaw rate.
+    Vec3 feedforward_earth{0.0, 0.0, input.target_yaw_rate_rad_sec};
+    if (config_.rate_feedforward_enabled) {
+        // AC_AttitudeControl::input_thrust_vector_heading with _rate_bf_ff_enabled:
+        // update_attitude_target(), then shape the target's angular velocity toward the command.
+        if (!shaping_started_) {
+            target_w_ = body.w; target_x_ = body.x; target_y_ = body.y; target_z_ = body.z;
+            shaping_started_ = true;
+        }
+        const double dt = input.dt_sec;
+        Vec3 ang_vel{ang_vel_target_x_, ang_vel_target_y_, ang_vel_target_z_};
+        Quat shaped{target_w_, target_x_, target_y_, target_z_};
+        const double ang_vel_length = norm(ang_vel);
+        if (ang_vel_length > epsilon) {
+            shaped = shaped * from_axis_angle(ang_vel * (1.0 / ang_vel_length), ang_vel_length * dt);
+        }
+        shaped = normalize({shaped.w, shaped.x, shaped.y, shaped.z});
+        const Vec3 error = thrust_heading_error(shaped, target);
+        const double slew_yaw = config_.rate_yaw_max_rad_sec > epsilon
+            ? std::min(config_.rate_yaw_max_rad_sec, config_.slew_yaw_rad_sec) : config_.slew_yaw_rad_sec;
+        const double heading_rate = std::clamp(input.target_yaw_rate_rad_sec, -slew_yaw, slew_yaw);
+        ang_vel.x = input_shaping_angle(error.x, config_.input_time_constant_sec, config_.accel_roll_max_rad_sec2,
+                                        ang_vel.x, 0.0, 0.0, dt);
+        ang_vel.y = input_shaping_angle(error.y, config_.input_time_constant_sec, config_.accel_pitch_max_rad_sec2,
+                                        ang_vel.y, 0.0, 0.0, dt);
+        ang_vel.z = input_shaping_angle(error.z, config_.input_time_constant_sec, config_.accel_yaw_max_rad_sec2,
+                                        ang_vel.z, heading_rate, slew_yaw, dt);
+        // AC_AttitudeControl::ang_vel_limit
+        ApAttitudeControlBackendConfig limits = config_;
+        limits.rate_yaw_max_rad_sec = slew_yaw;
+        limit_angular_rate(ang_vel, limits);
+        ang_vel_target_x_ = ang_vel.x; ang_vel_target_y_ = ang_vel.y; ang_vel_target_z_ = ang_vel.z;
+        target_w_ = shaped.w; target_x_ = shaped.x; target_y_ = shaped.y; target_z_ = shaped.z;
+        target = shaped;
+        feedforward_earth = rotate(shaped, ang_vel);
+    }
     const Vec3 thrust_up{0.0, 0.0, -1.0};
     const Vec3 target_thrust = rotate(target, thrust_up);
     const Vec3 body_thrust = rotate(body, thrust_up);
@@ -307,7 +388,7 @@ AngularRateTarget ApAttitudeControlBackend::run(const AttitudeControlInput& inpu
     };
     limit_angular_rate(correction, config_);
 
-    Vec3 desired_body_rate{0.0, 0.0, input.target_yaw_rate_rad_sec};
+    Vec3 desired_body_rate = feedforward_earth;
     limit_angular_rate(desired_body_rate, config_);
     const Vec3 body_feedforward = rotate(inverse(body), desired_body_rate);
 

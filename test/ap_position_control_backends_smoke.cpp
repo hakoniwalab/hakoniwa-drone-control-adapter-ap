@@ -45,6 +45,52 @@ void altitude_feedback_is_not_jerk_limited()
         "First-cycle altitude feedback must not be limited to jerk*dt");
 }
 
+void altitude_throttle_filter_has_step_response_and_reset()
+{
+    adapter::ApAltitudeControlBackendConfig config{};
+    config.velocity_p = 1.0;
+    config.velocity_i = config.velocity_d = config.velocity_feed_forward = 0.0;
+    config.velocity_filter_hz = config.velocity_derivative_filter_hz = 0.0;
+    config.acceleration_p = 1.0;
+    config.acceleration_i = config.acceleration_d = config.acceleration_feed_forward = 0.0;
+    config.acceleration_target_filter_hz = config.acceleration_error_filter_hz = 0.0;
+    config.acceleration_derivative_filter_hz = 0.0;
+    config.hover_thrust = 0.5;
+    config.thrust_max = 2.0;
+    config.throttle_filter_hz = 2.0;
+    adapter::ApAltitudeControlBackend backend(config);
+
+    constexpr double dt = 0.01;
+    adapter::AltitudeControlInput input{};
+    input.mode = adapter::AltitudeControlMode::Velocity;
+    require(std::abs(backend.run(input, dt).body_z + 1.0) < 1.0e-12,
+        "Throttle filter must start from the first in-air throttle value");
+
+    input.target_velocity.vz = 1.0;
+    const double alpha = dt / (dt + 1.0 / (2.0 * pi * config.throttle_filter_hz));
+    const auto first_step = backend.run(input, dt);
+    require(std::abs(first_step.body_z - (-1.0 - 0.2 * alpha)) < 1.0e-9,
+        "First throttle step must move by the 2 Hz low-pass alpha");
+    auto settled = first_step;
+    for (int i = 0; i < 1000; ++i) {
+        settled = backend.run(input, dt);
+    }
+    require(std::abs(settled.body_z + 1.2) < 1.0e-6,
+        "Filtered throttle must converge to the commanded throttle");
+
+    backend.reset();
+    require(std::abs(backend.run(input, dt).body_z + 1.2) < 1.0e-12,
+        "Reset throttle filter must initialize from the next throttle command");
+
+    config.throttle_filter_hz = 0.0;
+    backend.set_config(config);
+    input.target_velocity.vz = 0.0;
+    (void)backend.run(input, dt);
+    input.target_velocity.vz = 1.0;
+    require(std::abs(backend.run(input, dt).body_z + 1.2) < 1.0e-12,
+        "Zero throttle filter frequency must disable filtering");
+}
+
 void horizontal_feedback_is_limited_only_by_lean_angle()
 {
     adapter::ApHorizontalPositionControlBackendConfig config{};
@@ -106,13 +152,85 @@ void position_3d_uses_target_heading_for_tilt()
         "Missing yaw target must hold the current yaw");
 }
 
+void position_shaping_respects_speed_acceleration_and_stops()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    horizontal.position_p = 1.0;
+    horizontal.velocity_p = 1.0;
+    horizontal.velocity_i = horizontal.velocity_d = horizontal.velocity_feed_forward = 0.0;
+    horizontal.velocity_error_filter_hz = horizontal.velocity_derivative_filter_hz = 0.0;
+    horizontal.speed_max_mps = 5.0;
+    horizontal.angle_max_rad = 1.0;
+    adapter::ApPositionShapingConfig shaping{true, 2.0, 20.0, 2.5, 20.0};
+    adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping);
+
+    adapter::PositionControl3DPositionInput input{};
+    input.target_position.x = 30.0;
+    constexpr double dt = 0.01;
+    double previous_velocity = 0.0;
+    double max_velocity = 0.0;
+    double max_acceleration = 0.0;
+    // A unit-mass point vehicle follows the requested pitch acceleration. This
+    // exercises the shaper, position loop and stopping trajectory together.
+    for (int i = 0; i < 2000; ++i) {
+        const auto output = backend.run_position(input, dt);
+        const auto& q = output.target_attitude;
+        const double pitch = std::asin(std::max(-1.0, std::min(1.0,
+            2.0 * (q.w * q.y - q.z * q.x))));
+        const double acceleration = -9.80665 * std::tan(pitch);
+        input.state.velocity.x += acceleration * dt;
+        input.state.position.x += input.state.velocity.x * dt;
+        max_velocity = std::max(max_velocity, std::abs(input.state.velocity.x));
+        max_acceleration = std::max(max_acceleration,
+            std::abs((input.state.velocity.x - previous_velocity) / dt));
+        previous_velocity = input.state.velocity.x;
+    }
+    require(max_velocity <= horizontal.speed_max_mps + 0.08,
+        "Shaped 30 m move must not exceed horizontal speed_max_mps");
+    require(max_acceleration <= shaping.acceleration_xy_mps2 + 0.08,
+        "Shaped 30 m move must not exceed WPNAV_ACCEL in SI units");
+    require(std::abs(input.state.position.x - 30.0) < 0.15,
+        "Shaped 30 m move must arrive at the target");
+    require(std::abs(input.state.velocity.x) < 0.05,
+        "Shaped 30 m move must stop at the target");
+}
+
+void disabled_position_shaping_passes_target_directly()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    horizontal.position_p = 1.0;
+    horizontal.velocity_p = 1.0;
+    horizontal.velocity_i = horizontal.velocity_d = horizontal.velocity_feed_forward = 0.0;
+    horizontal.velocity_error_filter_hz = horizontal.velocity_derivative_filter_hz = 0.0;
+    horizontal.speed_max_mps = 100.0;
+    horizontal.angle_max_rad = 1.0;
+    adapter::ApPositionControl3DBackend backend(
+        altitude, horizontal, adapter::ApPositionShapingConfig{false});
+    adapter::PositionControl3DPositionInput input{};
+    input.target_position.x = 30.0;
+    const auto output = backend.run_position(input, 0.01);
+    const double pitch = std::atan2(
+        2.0 * (output.target_attitude.w * output.target_attitude.y
+             - output.target_attitude.z * output.target_attitude.x),
+        1.0 - 2.0 * (output.target_attitude.x * output.target_attitude.x
+                   + output.target_attitude.y * output.target_attitude.y));
+    require(std::abs(pitch + horizontal.angle_max_rad) < 1.0e-9,
+        "position_input_shaping 0 must hand the full target directly to the position P loop");
+}
+
+
 }  // namespace
 
 int main()
 {
     altitude_feedback_is_not_jerk_limited();
+    altitude_throttle_filter_has_step_response_and_reset();
     horizontal_feedback_is_limited_only_by_lean_angle();
     position_3d_uses_target_heading_for_tilt();
+    position_shaping_respects_speed_acceleration_and_stops();
+    disabled_position_shaping_passes_target_directly();
     std::cout << "ap_position_control_backends_smoke: PASS\n";
     return 0;
 }

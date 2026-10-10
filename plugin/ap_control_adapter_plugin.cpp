@@ -19,6 +19,7 @@
 #include <exception>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -35,6 +36,10 @@ constexpr double kPi = 3.14159265358979323846;
 struct Context {
     adapter::ArdupilotControllerConfig config;
     std::string capabilities;
+    // AP_Motors limit.throttle_lower/upper: written by this context's allocation, read on the next
+    // cycle by its altitude stages (AC_PosControl::update_z_controller). Shared so a stage keeps it
+    // whatever the destruction order.
+    std::shared_ptr<adapter::ApMotorThrottleLimits> motor_limits{std::make_shared<adapter::ApMotorThrottleLimits>()};
 };
 
 void set_error(char* error, std::size_t error_size, const std::string& message)
@@ -185,7 +190,9 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
 {
     (void)argument;
     clear_error(error, error_size);
-    const auto& config = static_cast<Context*>(context)->config;
+    auto* const plugin_context = static_cast<Context*>(context);
+    const auto& config = plugin_context->config;
+    const std::shared_ptr<const adapter::ApMotorThrottleLimits> motor_limits = plugin_context->motor_limits;
     try {
         switch (kind) {
         // The sensor filters (INS_GYRO_FILTER, INS_ACCEL_FILTER) wrap the stages
@@ -200,22 +207,29 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
                 new adapter::ApAttitudeControlBackend(config.attitude_control));
         case BackendKind::AltitudeControl:
             if (config.sensor_filter.accel_cutoff_hz > 0.0) {
-                return static_cast<adapter::IAltitudeControlBackend*>(new filters::FilteredAltitudeControl(config));
+                auto* backend = new filters::FilteredAltitudeControl(config);
+                backend->set_motor_limits_source(motor_limits);
+                return static_cast<adapter::IAltitudeControlBackend*>(backend);
+            } else {
+                auto* backend = new adapter::ApAltitudeControlBackend(config.altitude_control);
+                backend->set_motor_limits_source(motor_limits);
+                return static_cast<adapter::IAltitudeControlBackend*>(backend);
             }
-            return static_cast<adapter::IAltitudeControlBackend*>(
-                new adapter::ApAltitudeControlBackend(config.altitude_control));
         case BackendKind::HorizontalPositionControl:
             return static_cast<adapter::IHorizontalPositionControlBackend*>(
                 new adapter::ApHorizontalPositionControlBackend(config.horizontal_control));
-        case BackendKind::ControlAllocation:
-            return static_cast<adapter::IControlAllocationBackend*>(
-                new adapter::ApControlAllocationBackend(config.control_allocation));
+        case BackendKind::ControlAllocation: {
+            auto* backend = new adapter::ApControlAllocationBackend(config.control_allocation);
+            backend->set_motor_limits_sink(plugin_context->motor_limits);
+            return static_cast<adapter::IControlAllocationBackend*>(backend);
+        }
         case BackendKind::AllocationFeedbackPolicy:
             return static_cast<adapter::IAllocationFeedbackPolicy*>(new adapter::ApAllocationFeedbackPolicy());
         case BackendKind::Ekf: {
 #ifdef HAKO_AP_PLUGIN_WITH_EKF3
             // NavEKF3 through the DAL replay boundary (ap_ekf3_backend.hpp).
             auto* ekf = new adapter::ApEkf3Backend();
+            ekf->set_gps_lag_sec(config.ekf.gps_delay_ms * 1.0e-3);
             if (argument != nullptr) {
                 ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));
             }
@@ -226,10 +240,15 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
         }
         case BackendKind::PositionControl3D:
             if (config.sensor_filter.accel_cutoff_hz > 0.0) {
-                return static_cast<adapter::IPositionControl3DBackend*>(new filters::FilteredPositionControl3D(config));
+                auto* backend = new filters::FilteredPositionControl3D(config);
+                backend->set_motor_limits_source(motor_limits);
+                return static_cast<adapter::IPositionControl3DBackend*>(backend);
+            } else {
+                auto* backend = new adapter::ApPositionControl3DBackend(config.altitude_control, config.horizontal_control,
+                                                                      adapter::position_shaping_for(config));
+                backend->set_motor_limits_source(motor_limits);
+                return static_cast<adapter::IPositionControl3DBackend*>(backend);
             }
-            return static_cast<adapter::IPositionControl3DBackend*>(
-                new adapter::ApPositionControl3DBackend(config.altitude_control, config.horizontal_control));
         }
         set_error(error, error_size, "unknown backend kind " + std::to_string(static_cast<unsigned>(kind)));
         return nullptr;

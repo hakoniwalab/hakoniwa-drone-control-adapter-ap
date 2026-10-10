@@ -18,6 +18,13 @@ struct ApAttitudeControlBackendConfig {
     double rate_pitch_max_rad_sec{0.0};
     double rate_yaw_max_rad_sec{0.0};
     bool use_sqrt_controller{true};
+    // AC_AttitudeControl input shaping (ATC_RATE_FF_ENAB, default on): the controller tracks
+    // an internal target attitude that follows the commanded one through
+    // input_shaping_angle() with the time constant ATC_INPUT_TC and the accel limits, and
+    // feeds the target's angular velocity forward. Off: the commanded attitude is the target.
+    bool rate_feedforward_enabled{true};
+    double input_time_constant_sec{0.15};   // ATC_INPUT_TC
+    double slew_yaw_rad_sec{6000.0 * 3.14159265358979323846 / 18000.0};  // ATC_SLEW_YAW (cdeg/s)
 };
 
 struct ApAttitudeControlBackendStatus {
@@ -39,6 +46,10 @@ public:
 private:
     ApAttitudeControlBackendConfig config_{};
     ApAttitudeControlBackendStatus status_{};
+    // Input-shaping state (AC_AttitudeControl _attitude_target, _ang_vel_target)
+    bool shaping_started_{false};
+    double target_w_{1.0}, target_x_{0.0}, target_y_{0.0}, target_z_{0.0};
+    double ang_vel_target_x_{0.0}, ang_vel_target_y_{0.0}, ang_vel_target_z_{0.0};
 };
 
 }  // namespace hakoniwa::drone::control_adapter

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "description": "ArduPilot SITL with 1 ms physics and a 3 ms (333 Hz, SCHED_LOOP_RATE) main loop. ArduCopter runs its rate, attitude and position controllers in every main loop (FAST_TASK in ArduCopter/Copter.cpp), so every Hakoniwa control cycle is 3 ms. The physics and the IMU step at 1 ms: ArduPilot SITL declares its IMU at 1 kHz (AP_InertialSensor_SITL.h) and builds its filters for it, its main loop then runs evenly every 3 ms, and the actuator/sensor exchange takes about a millisecond, as on a flight controller. With 3 ms physics the IMU arrives at 333 Hz, the main loop alternates 3 and 6 ms and the exchange adds about 10 ms. Vehicle independent. Pass to create-pid-tuning-profile.bash --timing-profile. The EKF takes the IMU once per main loop (NavEKF3 gets the delta angle and velocity accumulated over the 3 ms loop), so its IMU interval stays 3 ms.",
+  "simulation_time_step_sec": 0.001,
+  "ekf_imu_interval_usec": 3000,
+  "controller_cycles": {
+    "PID_ALT_CONTROL_CYCLE": 0.003,
+    "POS_CONTROL_CYCLE": 0.003,
+    "SPD_CONTROL_CYCLE": 0.003,
+    "ANGULAR_CONTROL_CYCLE": 0.003,
+    "ANGULAR_RATE_CONTROL_CYCLE": 0.003
+  }
+}

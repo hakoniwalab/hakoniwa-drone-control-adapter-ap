@@ -320,6 +320,10 @@ ControlAllocationOutput ApControlAllocationBackend::run(
         output_sum += limited * hover_thrust;
     }
 
+    if (motor_limits_) {
+        motor_limits_->lower = limits.throttle_lower;
+        motor_limits_->upper = limits.throttle_upper;
+    }
     result.status.clipped = result.status.clipped || limits.roll || limits.pitch || limits.yaw
         || limits.throttle_lower || limits.throttle_upper;
     result.status.unallocated_torque_x = requested_roll - roll_thrust * rpy_scale;

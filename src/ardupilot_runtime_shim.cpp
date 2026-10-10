@@ -8,6 +8,7 @@
 
 #include <AP_HAL/system.h>
 #include <AP_Math/AP_Math.h>
+#include <AP_InternalError/AP_InternalError.h>
 #include <AP_Param/AP_Param.h>
 
 #include <chrono>
@@ -30,6 +31,20 @@ bool AP_Param::load()
 void AP_Param::save(bool)
 {
 }
+
+// AP_Math/control.cpp reports invalid arguments through INTERNAL_ERROR; this adapter has no
+// vehicle to flag, the caller validates its limits. Weak: the EKF3 runtime may provide the real one.
+__attribute__((weak)) void AP_InternalError::error(const AP_InternalError::error_t, uint16_t)
+{
+}
+
+namespace AP {
+__attribute__((weak)) AP_InternalError& internalerror()
+{
+    static AP_InternalError instance;
+    return instance;
+}
+}  // namespace AP
 
 namespace AP_HAL {
 
@@ -60,56 +75,15 @@ float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
     return dt / (dt + rc);
 }
 
-float sqrt_controller(float error, float p, float second_ord_lim, float dt)
+// AP_Math/vector3.cpp's Vector3<float>::length, which AP_Math/control.cpp (kinematic_limit) uses.
+template <>
+float Vector3<float>::length() const
 {
-    float correction;
-    if (second_ord_lim <= 0.0f) {
-        correction = error * p;
-    } else if (p == 0.0f) {
-        correction = std::copysign(
-            std::sqrt(2.0f * second_ord_lim * std::abs(error)), error);
-    } else {
-        const float linear_dist = second_ord_lim / (p * p);
-        if (error > linear_dist) {
-            correction = std::sqrt(
-                2.0f * second_ord_lim * (error - 0.5f * linear_dist));
-        } else if (error < -linear_dist) {
-            correction = -std::sqrt(
-                2.0f * second_ord_lim * (-error - 0.5f * linear_dist));
-        } else {
-            correction = error * p;
-        }
-    }
-    return dt > 0.0f
-        ? constrain_float(correction, -std::abs(error) / dt, std::abs(error) / dt)
-        : correction;
+    return std::sqrt(x * x + y * y + z * z);
 }
 
-Vector2f sqrt_controller(
-    const Vector2f& error, float p, float second_ord_lim, float dt)
-{
-    const float length = error.length();
-    return length > 0.0f
-        ? error * (sqrt_controller(length, p, second_ord_lim, dt) / length)
-        : Vector2f{};
-}
-
-float inv_sqrt_controller(float output, float p, float derivative_max)
-{
-    if (derivative_max > 0.0f && p == 0.0f) {
-        return output * output / (2.0f * derivative_max);
-    }
-    if (derivative_max <= 0.0f) {
-        return p != 0.0f ? output / p : 0.0f;
-    }
-    const float linear_velocity = derivative_max / p;
-    if (std::abs(output) < linear_velocity) {
-        return output / p;
-    }
-    const float stopping_dist = 0.5f * derivative_max / (p * p)
-        + output * output / (2.0f * derivative_max);
-    return std::copysign(stopping_dist, output);
-}
+// sqrt_controller, inv_sqrt_controller and the input shaping (shape_pos_vel_accel*,
+// update_pos_vel_accel*) come from ArduPilot's own AP_Math/control.cpp, linked in.
 
 template <typename T>
 T constrain_value_line(const T value, const T low, const T high, uint32_t)
@@ -137,6 +111,7 @@ float safe_sqrt(const T value)
 }
 
 template float safe_sqrt<float>(float);
+template float safe_sqrt<double>(double);
 
 template <typename Arithmetic1, typename Arithmetic2>
 typename std::enable_if<std::is_integral<

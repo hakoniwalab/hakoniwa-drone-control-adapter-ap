@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <hakoniwa/drone/control_adapter/ekf_adapter.hpp>
@@ -26,6 +27,8 @@ public:
     void set_armed_status(bool armed) override;
     void set_in_air_status(bool in_air) override;
     void set_vehicle_at_rest(bool at_rest) override;
+    // The GPS lag NavEKF3 allows for (AP_GPS::get_lag, GPS1_DELAY_MS): the vehicle's real GPS delay.
+    void set_gps_lag_sec(double lag_sec);
 
     void push_imu(const EkfImuInput& input, double dt_sec) override;
     void push_mag(const EkfMagInput& input) override;

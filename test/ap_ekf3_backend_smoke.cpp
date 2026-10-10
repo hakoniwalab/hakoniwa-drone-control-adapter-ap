@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using namespace hakoniwa::drone::control_adapter;
@@ -10,6 +11,16 @@ using namespace hakoniwa::drone::control_adapter;
 int main()
 {
     ApEkf3Backend ekf;
+    ekf.set_gps_lag_sec(0.0);
+    ekf.set_gps_lag_sec(0.25);
+    for (double invalid : {-0.001, 0.251, std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+        bool rejected = false;
+        try { ekf.set_gps_lag_sec(invalid); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        if (!rejected) { return 9; }
+    }
+    ekf.set_gps_lag_sec(0.1);
     EkfAdapterConfig config{};
     config.mag_declination_deg = 0.0;
     ekf.set_config(config);

@@ -39,6 +39,7 @@ add_library(hakoniwa_drone_control_adapter_ap STATIC
     "${ARDUPILOT_ROOT}/libraries/AC_PID/AC_P_2D.cpp"
     "${ARDUPILOT_ROOT}/libraries/AC_PID/AC_PID.cpp"
     "${ARDUPILOT_ROOT}/libraries/AC_PID/AC_PID_2D.cpp"
+    "${ARDUPILOT_ROOT}/libraries/AP_Math/control.cpp"
     "${ARDUPILOT_ROOT}/libraries/AP_Math/vector2.cpp"
     "${ARDUPILOT_ROOT}/libraries/Filter/LowPassFilter.cpp"
     "${ARDUPILOT_ROOT}/libraries/Filter/SlewCalculator2D.cpp"

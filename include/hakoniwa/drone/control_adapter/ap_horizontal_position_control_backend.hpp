@@ -16,8 +16,13 @@ public:
     void reset() override;
     HorizontalTiltTarget run(const HorizontalPositionControlInput&, double dt_sec) override;
     void set_config(const ApHorizontalPositionControlBackendConfig&);
+    // AC_PosControl _accel_desired.xy (NE m/s^2), added to the velocity PID's acceleration target as
+    // update_xy_controller does; set by the 3D stage's input shaping, 0 otherwise.
+    void set_acceleration_feedforward(double north_mps2, double east_mps2) { acceleration_feedforward_x_ = north_mps2; acceleration_feedforward_y_ = east_mps2; }
+    double speed_max_mps() const { return config_.speed_max_mps; }
 private:
     class Impl; ApHorizontalPositionControlBackendConfig config_{}; std::unique_ptr<Impl> impl_;
     double acceleration_target_x_{0.0}, acceleration_target_y_{0.0};
+    double acceleration_feedforward_x_{0.0}, acceleration_feedforward_y_{0.0};
 };
 }

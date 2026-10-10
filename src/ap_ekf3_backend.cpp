@@ -222,7 +222,7 @@ public:
 
         gps_info_.instance = 0;
         gps_info_.antenna_offset.zero();
-        gps_info_.lag_sec = 0.0f;
+        gps_info_.lag_sec = static_cast<float>(gps_lag_sec_);
         gps_info_.have_vertical_velocity = true;
         gps_info_.horizontal_accuracy_returncode = true;
         gps_info_.vertical_accuracy_returncode = true;
@@ -383,6 +383,7 @@ public:
     AP_DAL& dal_;
     std::unique_ptr<NavEKF3> ekf_;
     EkfAdapterConfig config_{};
+    double gps_lag_sec_{0.0};
     EkfEstimatedState state_{};
 
     log_RISH imu_header_{};
@@ -426,6 +427,13 @@ void ApEkf3Backend::set_config(const EkfAdapterConfig& config) { impl_->config_ 
 void ApEkf3Backend::set_armed_status(bool armed) { impl_->armed_ = armed; }
 void ApEkf3Backend::set_in_air_status(bool in_air) { impl_->in_air_ = in_air; }
 void ApEkf3Backend::set_vehicle_at_rest(bool at_rest) { impl_->at_rest_ = at_rest; }
+void ApEkf3Backend::set_gps_lag_sec(double lag_sec)
+{
+    if (!std::isfinite(lag_sec) || lag_sec < 0.0 || lag_sec > 0.25) {
+        throw std::invalid_argument("GPS lag must be 0..0.25 s (NavEKF3 limit)");
+    }
+    impl_->gps_lag_sec_ = lag_sec;
+}
 void ApEkf3Backend::push_imu(const EkfImuInput& input, double dt_sec) { impl_->push_imu(input, dt_sec); }
 void ApEkf3Backend::push_mag(const EkfMagInput& input) { impl_->push_mag(input); }
 void ApEkf3Backend::push_baro(const EkfBaroInput& input) { impl_->push_baro(input); }

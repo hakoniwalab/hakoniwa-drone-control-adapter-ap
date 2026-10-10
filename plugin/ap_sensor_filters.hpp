@@ -13,6 +13,7 @@
 #include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 namespace hakoniwa::drone::control_adapter::plugin_filters {
@@ -111,6 +112,10 @@ public:
         inner_.reset();
         az_.reset();
     }
+    void set_motor_limits_source(std::shared_ptr<const ApMotorThrottleLimits> source)
+    {
+        inner_.set_motor_limits_source(std::move(source));
+    }
     NormalizedVerticalThrustCommand run(const AltitudeControlInput& input, double dt_sec) override
     {
         AltitudeControlInput filtered = input;
@@ -128,7 +133,7 @@ private:
 class FilteredPositionControl3D final : public IPositionControl3DBackend {
 public:
     FilteredPositionControl3D(const ArdupilotControllerConfig& config)
-        : inner_(config.altitude_control, config.horizontal_control)
+        : inner_(config.altitude_control, config.horizontal_control, position_shaping_for(config))
     {
         for (auto* filter : {&ax_, &ay_, &az_}) {
             filter->configure(config.runtime.altitude_hz, config.sensor_filter.accel_cutoff_hz);
@@ -140,6 +145,10 @@ public:
         ax_.reset();
         ay_.reset();
         az_.reset();
+    }
+    void set_motor_limits_source(std::shared_ptr<const ApMotorThrottleLimits> source)
+    {
+        inner_.set_motor_limits_source(std::move(source));
     }
     PositionControl3DOutput run_position(const PositionControl3DPositionInput& input, double dt_sec) override
     {

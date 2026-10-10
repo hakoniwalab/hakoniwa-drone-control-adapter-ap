@@ -41,6 +41,7 @@ void proportional_roll_and_quaternion_sign()
 {
     adapter::ApAttitudeControlBackendConfig config{};
     config.use_sqrt_controller = false;
+    config.rate_feedforward_enabled = false;
     adapter::ApAttitudeControlBackend backend(config);
 
     auto input = base_input();
@@ -63,6 +64,7 @@ void yaw_wrap_and_feedforward()
 {
     adapter::ApAttitudeControlBackendConfig config{};
     config.use_sqrt_controller = false;
+    config.rate_feedforward_enabled = false;
     config.rate_yaw_p = 0.0;
     adapter::ApAttitudeControlBackend backend(config);
 
@@ -84,6 +86,7 @@ void large_tilt_suppresses_yaw()
 {
     adapter::ApAttitudeControlBackendConfig config{};
     config.use_sqrt_controller = false;
+    config.rate_feedforward_enabled = false;
     adapter::ApAttitudeControlBackend backend(config);
 
     auto input = base_input();
@@ -101,6 +104,7 @@ void rate_limit_and_reset()
 {
     adapter::ApAttitudeControlBackendConfig config{};
     config.use_sqrt_controller = false;
+    config.rate_feedforward_enabled = false;
     config.rate_roll_max_rad_sec = 0.2;
     config.rate_pitch_max_rad_sec = 0.4;
     adapter::ApAttitudeControlBackend backend(config);
@@ -122,6 +126,7 @@ void rate_limit_and_reset()
 void sqrt_controller_limits_large_error()
 {
     adapter::ApAttitudeControlBackendConfig config{};
+    config.rate_feedforward_enabled = false;
     config.accel_roll_max_rad_sec2 = 1.0;
     adapter::ApAttitudeControlBackend backend(config);
 
@@ -134,6 +139,57 @@ void sqrt_controller_limits_large_error()
         2.0 * limited_acceleration * (0.5 - linear_distance * 0.5));
     require(near(output.p, expected, 1.0e-8),
         "Large attitude error must use ArduPilot sqrt-controller shaping");
+}
+
+void input_shaping_acceleration_limits_first_cycle()
+{
+    adapter::ApAttitudeControlBackendConfig config{};
+    config.use_sqrt_controller = false;
+    config.accel_roll_max_rad_sec2 = 2.0;
+    adapter::ApAttitudeControlBackend backend(config);
+
+    auto input = base_input();
+    input.dt_sec = 0.01;
+    input.target_attitude = axis_angle(1.0, 0.0, 0.0, 0.5);
+    const auto first = backend.run(input);
+    require(near(first.p, config.accel_roll_max_rad_sec2 * input.dt_sec, 1.0e-9),
+        "Input shaping must ramp roll rate by acceleration limit times dt");
+    require(first.p < config.angle_roll_p * 0.5,
+        "First shaped cycle must not apply the full commanded attitude error");
+
+    const auto second = backend.run(input);
+    require(second.p > first.p,
+        "Shaped roll rate must continue rising toward a step attitude command");
+    require(second.p <= first.p + config.accel_roll_max_rad_sec2 * input.dt_sec + 0.001,
+        "Shaped roll-rate rise must remain acceleration limited");
+}
+
+void yaw_rate_input_is_acceleration_limited()
+{
+    adapter::ApAttitudeControlBackendConfig config{};
+    config.use_sqrt_controller = false;
+    config.accel_yaw_max_rad_sec2 = 1.0;
+    config.slew_yaw_rad_sec = 1.0;
+    config.rate_yaw_max_rad_sec = 0.8;
+    adapter::ApAttitudeControlBackend backend(config);
+
+    auto input = base_input();
+    input.dt_sec = 0.01;
+    input.target_yaw_rate_rad_sec = 0.5;
+    const auto first = backend.run(input);
+    require(near(first.r, config.accel_yaw_max_rad_sec2 * input.dt_sec, 1.0e-9),
+        "Yaw-rate feed-forward must ramp by yaw acceleration limit times dt");
+
+    bool reached_command = false;
+    for (int i = 0; i < 100; ++i) {
+        const auto output = backend.run(input);
+        if (output.r >= 0.5 - 0.02) {
+            reached_command = true;
+            break;
+        }
+    }
+    require(reached_command,
+        "Yaw-rate feed-forward must reach the commanded rate over time");
 }
 
 void invalid_input_is_rejected()
@@ -169,6 +225,8 @@ int main()
     large_tilt_suppresses_yaw();
     rate_limit_and_reset();
     sqrt_controller_limits_large_error();
+    input_shaping_acceleration_limits_first_cycle();
+    yaw_rate_input_is_acceleration_limited();
     invalid_input_is_rejected();
     std::cout << "ap_attitude_control_backend_smoke: PASS\n";
     return 0;

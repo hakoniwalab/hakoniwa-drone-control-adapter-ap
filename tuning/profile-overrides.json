@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "ArduPilot adapter overrides for a px4-ekf-flow (plugin) PID tuning profile. EKF: NavEKF3 is ready ~33 s after start (ArduPilot's GPS checks), PX4's EKF2 ~10 s. Search ranges: with ArduPilot's gyro low-pass (INS_GYRO_FILTER) the rate loop is stable only with a small rate P (ArduPilot's default 0.135), and a static trim must be removed by the rate integrator (ArduPilot's convention I = P), so the hover phase searches the rate I too. Yaw, altitude and horizontal keep the PX4 ranges (the yaw loop needs the PX4 rate P range to meet the 0.5 Hz phase gate). Hard gates: ArduPilot's yaw loop is shaped more slowly by design (ATC_ACCEL_Y_MAX, yaw rate filters): with ArduPilot's default gains the 0.5 Hz yaw phase lag is 77 deg (EAMS, 3 ms), so the angle gate is 90 deg instead of PX4's 50.",
+  "description": "ArduPilot adapter overrides for a px4-ekf-flow (plugin) PID tuning profile. EKF: NavEKF3 is ready ~33 s after start (ArduPilot's GPS checks), PX4's EKF2 ~10 s. Search ranges: with ArduPilot's gyro low-pass (INS_GYRO_FILTER) the rate loop is stable only with a small rate P (ArduPilot's default 0.135), and a static trim must be removed by the rate integrator (ArduPilot's convention I = P), so the hover phase searches the rate I too. Yaw, altitude and horizontal keep the PX4 ranges (the yaw loop needs the PX4 rate P range to meet the 0.5 Hz phase gate). Hard gates: ArduPilot's yaw loop is shaped more slowly by design (ATC_ACCEL_Y_MAX, yaw rate filters): with ArduPilot's default gains the 0.5 Hz yaw phase lag is 77 deg (EAMS, 3 ms), so the angle gate is 90 deg instead of PX4's 50. Position phase (apply after tuning/tools/add_position_phase.py): a long, fast mission like PX4's SITL check (30 m north at 5 m/s, back turning to heading 179 (180 leaves the turn direction undecided, the two may turn opposite ways), 30 m east; PID_POS_MAX_SPD 5 for that mission only, as the SITL check commands 5 m/s), scored and gated on its attitude ripple (roll/pitch wobble about their course), and the horizontal velocity P and D searched with the position gain, because a ringing velocity loop is what wobbles the attitude. The tilt saturation gate is 3 s: the 30 m legs accelerate and brake at the tilt limit for about 2.5 s. Angle phase: a 30 s level hover after the step and sine runs (suite.hold), gated on roll/pitch peak (3 deg) and on the attitude wobble not growing (last third <= 3x the first): a rate loop whose integral outweighs its P passed the 12 s runs and diverged in the altitude phase's longer hover once the vehicle flew clear of the ground (altitude from the takeoff point). The rate I range is 0..0.5, no larger than the rate P range (ArduPilot's default I = P). Altitude phase: with the altitude from the takeoff point the vehicle really climbs 0.5 m (in the world frame the EAMS sat at its 0.47 m rest height, so the phase was judged on the ground). The step is 0.5 m (a 0.1 m step's 5 mm settle band is inside the EKF's 2-3 cm baro drift), the takeoff climb may reach the configured climb speed (ArduPilot shapes it to WPNAV_SPEED_UP 2.5 m/s; 2.75 with margin), and the takeoff may cross the target up to 3 times (the crossing count has no band).",
   "ekf_ready_extra_sec": 32.0,
   "search_space": {
     "hover": {
@@ -16,7 +16,7 @@
       },
       "PID_ROLL_RATE_Ki": {
         "min": 0.0,
-        "max": 1.0,
+        "max": 0.5,
         "step": 0.05
       }
     },
@@ -33,7 +33,7 @@
       },
       "PID_ROLL_RATE_Ki": {
         "min": 0.0,
-        "max": 1.0,
+        "max": 0.5,
         "step": 0.05
       },
       "PID_ROLL_RATE_Kd": {
@@ -41,12 +41,146 @@
         "max": 0.02,
         "step": 0.005
       }
+    },
+    "position": {
+      "PID_POS_VX_Kp": {
+        "min": 2.0,
+        "max": 10.0,
+        "step": 0.5
+      },
+      "PID_POS_VY_Kp": {
+        "mirror_of": "PID_POS_VX_Kp"
+      },
+      "PID_POS_VX_Kd": {
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.1
+      },
+      "PID_POS_VY_Kd": {
+        "mirror_of": "PID_POS_VX_Kd"
+      }
     }
   },
   "hard_gates": {
     "angle": {
       "yaw_sine_0p5_phase": {
         "value": 90.0
+      },
+      "hold_roll_peak": {
+        "path": [
+          "hold",
+          "roll_peak_abs_deg"
+        ],
+        "op": "lte",
+        "value": 3.0
+      },
+      "hold_pitch_peak": {
+        "path": [
+          "hold",
+          "pitch_peak_abs_deg"
+        ],
+        "op": "lte",
+        "value": 3.0
+      },
+      "hold_growth": {
+        "path": [
+          "hold",
+          "attitude_rms_growth"
+        ],
+        "op": "lte",
+        "value": 3.0
+      }
+    },
+    "position": {
+      "long_fast_attitude_ripple": {
+        "path": [
+          "mission",
+          "long-fast",
+          "attitude_ripple_deg"
+        ],
+        "op": "lte",
+        "value": 2.5
+      },
+      "tilt_saturation": {
+        "value": 3.0
+      }
+    },
+    "altitude": {
+      "prepare_peak_abs_vz": {
+        "value": 2.75
+      },
+      "prepare_target_cross_count": {
+        "value": 3
+      }
+    }
+  },
+  "missions": {
+    "position": [
+      {
+        "name": "long-fast",
+        "controller_param_overrides": {
+          "PID_POS_MAX_SPD": 5.0
+        },
+        "waypoints": [
+          {
+            "time_sec": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "yaw_deg": 0.0
+          },
+          {
+            "time_sec": 1.0,
+            "x": 30.0,
+            "y": 0.0
+          },
+          {
+            "time_sec": 13.0,
+            "x": 0.0,
+            "y": 0.0,
+            "yaw_deg": 179.0
+          },
+          {
+            "time_sec": 25.0,
+            "x": 0.0,
+            "y": 30.0,
+            "yaw_deg": 179.0
+          }
+        ]
+      }
+    ]
+  },
+  "score_terms": {
+    "position": [
+      {
+        "id": "long_fast_attitude_ripple",
+        "path": [
+          "mission",
+          "long-fast",
+          "attitude_ripple_deg"
+        ],
+        "kind": "band_upper",
+        "best": 0.3,
+        "worst": 2.5,
+        "points": 60
+      }
+    ]
+  },
+  "phase_args": {
+    "position": {
+      "trials": 40
+    }
+  },
+  "evaluation": {
+    "angle": {
+      "suite": {
+        "hold": {
+          "duration_sec": 30.0
+        }
+      }
+    },
+    "altitude": {
+      "suite": {
+        "altitude_amplitude": 0.5
       }
     }
   }
