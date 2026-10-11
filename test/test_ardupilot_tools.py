@@ -190,7 +190,12 @@ class SetupSitlRuntimeTest(unittest.TestCase):
             "simulation": {"timeStep": 0.003},
             "components": {
                 "droneDynamics": {"mujoco": {"modelPath": "drone.xml"}},
-                "sensors": {"gps": {"delayMsec": 100}, "baro": {"delayMsec": 60}},
+                "sensors": {
+                    "gps": {"delayMsec": 100, "noise": 1},
+                    "baro": {"delayMsec": 60},
+                    "mag": {"delayMsec": 20},
+                    "imu": {"noise": 2},
+                },
             },
             "controller": {"backendType": "adapter-plugin"},
         }
@@ -227,10 +232,16 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertEqual(config["simulation"]["timeStep"], 0.003)
         self.assertEqual(config["simulation"]["mavlink_tx_period_msec"]["hil_sensor"], 3)
         self.assertIn("sitl", config["simulation"])
+        self.assertEqual(config["components"]["sensors"]["gps"], {"noise": 1})
+        self.assertEqual(config["components"]["sensors"]["baro"], {})
+        self.assertEqual(config["components"]["sensors"]["mag"], {})
+        self.assertEqual(config["components"]["sensors"]["imu"], {"noise": 2})
         self.assertTrue((self.out / "drone_config" / "drone.xml").is_file())
         for name in ("run-service.bash", "run-arducopter.bash"):
             self.assertTrue((self.out / name).stat().st_mode & 0o111)
-        self.assertTrue((self.out / "ardupilot-sitl-runtime.json").is_file())
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed"], ["gps", "baro", "mag"])
+        self.assertIn("apply it twice", marker["aircraft_service_sensor_delay_reason"])
 
     def test_missing_default_service_is_an_error(self) -> None:
         stderr = io.StringIO()

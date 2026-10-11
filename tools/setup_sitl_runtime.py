@@ -18,7 +18,10 @@ directory with:
                      delay the tuning ran with and the EKF allows for (params.parm) is applied there
   drone_config/      the vehicle for Drone PRO's aircraft_service_ardupilot:
                      the profile's 3 ms vehicle with the SITL section
-                     (actuator_to_rotor_index) of --sitl-drone-config
+                     (actuator_to_rotor_index) of --sitl-drone-config. Sensor
+                     delayMsec values are removed: ArduPilot SITL makes and
+                     delays GPS/barometer data itself, so delaying them in the
+                     aircraft service as well would apply the delay twice
   run-service.bash   Drone PRO's standalone aircraft service (terminal 1)
   run-arducopter.bash arducopter with the two parameter files (terminal 2)
   ardupilot-sitl-runtime.json  what the runtime was made from
@@ -66,6 +69,16 @@ def read_parm(path: Path, name: str) -> float | None:
 def sensor_delay_msec(drone_config: dict, sensor: str) -> float:
     """components.sensors.<sensor>.delayMsec of a Drone PRO vehicle (0 when absent)."""
     return float(drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("delayMsec", 0.0))
+
+
+def remove_service_sensor_delays(drone_config: dict) -> list[str]:
+    """Remove delayMsec from every aircraft-service sensor and return their names."""
+    removed = []
+    for name, sensor_config in drone_config.get("components", {}).get("sensors", {}).items():
+        if isinstance(sensor_config, dict) and "delayMsec" in sensor_config:
+            del sensor_config["delayMsec"]
+            removed.append(name)
+    return removed
 
 
 def sitl_accel_filter_hz(tuned_cutoff_hz: float, sim_step_sec: float) -> float:
@@ -163,6 +176,7 @@ def main() -> int:
     tuned["simulation"].setdefault("mavlink_tx_period_msec", {})["hil_sensor"] = max(1, int(round(sim_step_sec * 1000)))
     for key in ("controller",):
         tuned[key] = sitl_config.get(key, tuned.get(key))  # ArduPilot flies; the service's controller is the SITL one
+    removed_service_sensor_delays = remove_service_sensor_delays(tuned)
     write_json(config_dir / "drone_config_0.json", tuned)
 
     # 4. Launch scripts
@@ -195,6 +209,9 @@ cd {out}
     write_json(out / MARKER, {
         "profile": str(profile), "runtime": str(runtime), "sitl_drone_config": str(sitl_source),
         "arducopter": str(ARDUCOPTER), "arducopter_built": ARDUCOPTER.is_file(),
+        "aircraft_service_sensor_delay_msec_removed": removed_service_sensor_delays,
+        "aircraft_service_sensor_delay_reason":
+            "ArduPilot SITL creates and delays GPS/barometer data; service-side delay would apply it twice",
     })
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():
