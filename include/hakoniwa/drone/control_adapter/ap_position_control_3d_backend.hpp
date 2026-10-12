@@ -55,6 +55,8 @@ public:
     PositionControl3DOutput run_position(const PositionControl3DPositionInput& input, double dt_sec) override;
     PositionControl3DOutput run_velocity(const PositionControl3DVelocityInput& input, double dt_sec) override;
     void set_motor_limits_source(std::shared_ptr<const ApMotorThrottleLimits> source) { motor_limits_ = source; altitude_.set_motor_limits_source(std::move(source)); }
+    double landing_velocity_target_up_mps() const { return landing_vel_up_mps_; }
+    double landing_acceleration_target_up_mps2() const { return landing_accel_up_mps2_; }
 
 private:
     PositionControl3DOutput run(
@@ -84,6 +86,7 @@ private:
     double hold_x_ned_{0.0}, hold_y_ned_{0.0};
     double landed_candidate_sec_{0.0};
     bool landed_maybe_{false}, landed_{false};
+    double landing_vel_up_mps_{0.0}, landing_accel_up_mps2_{0.0};
     std::shared_ptr<const ApMotorThrottleLimits> motor_limits_{};
     bool shaping_started_{false};
     double pos_ne_[2]{0.0, 0.0}, vel_ne_[2]{0.0, 0.0}, accel_ne_[2]{0.0, 0.0};

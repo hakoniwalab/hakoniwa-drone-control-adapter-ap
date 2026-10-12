@@ -21,9 +21,9 @@ directory with:
   drone_config/      the vehicle for Drone PRO's aircraft_service_ardupilot:
                      the profile's 3 ms vehicle with the SITL section
                      (actuator_to_rotor_index) of --sitl-drone-config. Sensor
-                     delayMsec values are removed: ArduPilot SITL makes and
-                     delays GPS/barometer data itself, so delaying them in the
-                     aircraft service as well would apply the delay twice
+                     delayMsec values and gyro.drift are removed: ArduPilot SITL
+                     makes and delays GPS/barometer data and applies SIM_DRIFT_*
+                     itself, so the aircraft service must not apply them twice
   run-service.bash   Drone PRO's standalone aircraft service (terminal 1)
   run-arducopter.bash arducopter with the two parameter files (terminal 2)
   ardupilot-sitl-runtime.json  what the runtime was made from
@@ -85,6 +85,15 @@ def remove_service_sensor_delays(drone_config: dict) -> list[str]:
             del sensor_config["delayMsec"]
             removed.append(name)
     return removed
+
+
+def remove_service_gyro_drift(drone_config: dict) -> bool:
+    """Remove aircraft-service gyro drift; ArduPilot SITL applies SIM_DRIFT_* itself."""
+    gyro = drone_config.get("components", {}).get("sensors", {}).get("gyro", {})
+    if isinstance(gyro, dict) and "drift" in gyro:
+        del gyro["drift"]
+        return True
+    return False
 
 
 def sitl_accel_filter_hz(tuned_cutoff_hz: float, sim_step_sec: float) -> float:
@@ -191,6 +200,7 @@ def main() -> int:
     for key in ("controller",):
         tuned[key] = sitl_config.get(key, tuned.get(key))  # ArduPilot flies; the service's controller is the SITL one
     removed_service_sensor_delays = remove_service_sensor_delays(tuned)
+    removed_service_gyro_drift = remove_service_gyro_drift(tuned)
     write_json(config_dir / "drone_config_0.json", tuned)
 
     # 4. Launch scripts
@@ -226,6 +236,9 @@ cd {out}
         "aircraft_service_sensor_delay_msec_removed": removed_service_sensor_delays,
         "aircraft_service_sensor_delay_reason":
             "ArduPilot SITL creates and delays GPS/barometer data; service-side delay would apply it twice",
+        "aircraft_service_gyro_drift_removed": removed_service_gyro_drift,
+        "aircraft_service_gyro_drift_reason":
+            "ArduPilot SITL applies SIM_DRIFT_*; service-side gyro drift would apply it twice",
     })
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():

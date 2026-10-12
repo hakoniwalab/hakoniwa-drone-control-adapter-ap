@@ -46,9 +46,10 @@ from ardupilot_declination import magnetic_field  # noqa: E402
 TEMPLATE = ROOT / "config" / "ardupilot-controller-config.json"
 PLUGIN = ROOT / "install" / "lib" / "libhakoniwa_drone_control_adapter_ap_plugin.so"
 SITL_RATE_HZ = 1.0 / 0.003  # ArduCopter's main loop in SITL: every Hakoniwa physics step
-# EKF sensor periods as ArduPilot SITL sees them: IMU each step, compass 50 Hz, baro 100 Hz,
-# GPS 5 Hz (SIM_GPS_HZ default)
-EKF_INTERVALS_USEC = {"imuIntervalUsec": 3000, "magIntervalUsec": 20000,
+# EKF sensor periods as ArduPilot SITL sees them: IMU each step, compass 10 Hz (ArduCopter reads the
+# compass in a 10 Hz task, ArduCopter/Copter.cpp; at 50 Hz the plugin's yaw was held harder by the
+# compass than SITL's, x500 2026-10-12), baro 100 Hz, GPS 5 Hz (SIM_GPS_HZ default)
+EKF_INTERVALS_USEC = {"imuIntervalUsec": 3000, "magIntervalUsec": 100000,
                       "baroIntervalUsec": 10000, "gpsIntervalUsec": 200000}
 # Mission Planner plugins/InitialParamsCalculator.cs calc_values() is the source of these initial
 # values. They replace the lower ArduPilot defaults because the x500 hovered with a persistent
@@ -60,6 +61,10 @@ CONTRACT_TEST_ONLY_PARAMETERS = ("ATC_RATE_FF_ENAB",)
 # ArduPilot SITL's sensor delays (SIM_GPS_LAG_MS default; EK3_HGT_DELAY default, which the plugin's
 # NavEKF3 cannot change), used when the vehicle sets none
 DEFAULT_SENSOR_DELAY_MSEC = {"gps": 100.0, "baro": 60.0}
+# Match the standard deviation of ArduPilot SITL's uniform SIM_BARO_RND +/-0.2 m.
+# Drone PRO's SensorNoise is Gaussian; matching the distribution shape is intentionally out of scope.
+SITL_MAG_NOISE_GAUSS = 0.0
+SITL_BARO_NOISE_ALT_STD_M = 0.2 / math.sqrt(3.0)
 
 
 def parse_param_text(path: Path) -> dict[str, float]:
@@ -183,6 +188,21 @@ def main() -> int:
         f"intensity {field['intensity_gauss']:.6f} gauss)"
     )
     changes.append("gyro drift: ArduPilot SITL default 0.05 deg/s/min triangular over 5 min")
+    sensors.setdefault("mag", {})["noise"] = SITL_MAG_NOISE_GAUSS
+    sensors.setdefault("baro", {})["noise"] = SITL_BARO_NOISE_ALT_STD_M
+    drone.setdefault("notes", []).extend([
+        "mag noise 0 gauss matches ArduPilot SITL SIM_MAG_RND=0",
+        "baro noise std 0.2/sqrt(3) m matches the standard deviation of ArduPilot SITL "
+        "SIM_BARO_RND=0.2 uniform +/-0.2 m; Drone PRO noise remains Gaussian",
+        "the ArduPilot adapter EKF uses pressure_alt (m), not abs_pressure (Pa); Drone PRO also adds "
+        "the same numeric std to abs_pressure, so its incidental pressure noise is 0.115 Pa "
+        "(about 0.01 m altitude near sea level)",
+    ])
+    changes.append("mag noise: 0 gauss (SIM_MAG_RND 0)")
+    changes.append(
+        f"baro noise: {SITL_BARO_NOISE_ALT_STD_M:.9g} m Gaussian std "
+        "(same std as SIM_BARO_RND 0.2 uniform +/-0.2 m)"
+    )
     delays: dict[str, float] = {}
     for name, default in DEFAULT_SENSOR_DELAY_MSEC.items():
         sensor = sensors.setdefault(name, {})

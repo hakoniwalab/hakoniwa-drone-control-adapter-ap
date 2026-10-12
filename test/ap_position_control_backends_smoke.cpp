@@ -196,6 +196,32 @@ void position_shaping_respects_speed_acceleration_and_stops()
         "Shaped 30 m move must stop at the target");
 }
 
+void position_feedback_is_added_after_shaping_speed_limit()
+{
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    horizontal.position_p = 1.0;
+    horizontal.velocity_p = 1.0;
+    horizontal.velocity_i = horizontal.velocity_d = horizontal.velocity_feed_forward = 0.0;
+    horizontal.velocity_error_filter_hz = horizontal.velocity_derivative_filter_hz = 0.0;
+    horizontal.speed_max_mps = 5.0;
+    horizontal.angle_max_rad = 1.0;
+    adapter::ApHorizontalPositionControlBackend backend(horizontal);
+    adapter::HorizontalPositionControlInput input{};
+    input.mode = adapter::HorizontalControlMode::Position;
+    input.target_position.x = 100.0;
+    input.target_velocity.vx = horizontal.speed_max_mps;
+    (void)backend.run(input, 0.01);
+    require(backend.velocity_target_x_mps() > horizontal.speed_max_mps,
+        "Position correction must be added after the shaping velocity limit");
+
+    backend.reset();
+    input.mode = adapter::HorizontalControlMode::Velocity;
+    input.target_velocity.vx = horizontal.speed_max_mps * 2.0;
+    (void)backend.run(input, 0.01);
+    require(std::abs(backend.velocity_target_x_mps() - horizontal.speed_max_mps) < 1.0e-6,
+        "Velocity mode must limit the requested velocity to WPNAV_SPEED");
+}
+
 void disabled_position_shaping_passes_target_directly()
 {
     adapter::ApAltitudeControlBackendConfig altitude{};
@@ -298,6 +324,40 @@ void flight_phases_spool_land_and_reset()
         "A new Takeoff phase must reset landed state and restart spool");
 }
 
+void landing_descent_velocity_obeys_acceleration_and_jerk_limits()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    altitude.throttle_filter_hz = 0.0;
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    adapter::ApPositionShapingConfig shaping{true, 2.5, 5.0, 1.0, 2.0};
+    adapter::ApFlightPhaseConfig phase{};
+    phase.land_speed_mps = 0.5;
+    phase.land_alt_low_m = 10.0;
+    adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping, phase);
+
+    adapter::PositionControl3DPositionInput input{};
+    input.flight_phase = adapter::FlightPhase::Landing;
+    input.state.position.z = -5.0;
+    constexpr double dt = 0.01;
+    double previous_velocity = 0.0;
+    double previous_acceleration = 0.0;
+    for (int i = 0; i < 300; ++i) {
+        (void)backend.run_position(input, dt);
+        const double velocity = backend.landing_velocity_target_up_mps();
+        const double acceleration = backend.landing_acceleration_target_up_mps2();
+        require(std::abs(acceleration - previous_acceleration) <= shaping.jerk_z_mps3 * dt + 1.0e-5,
+            "Landing acceleration target must obey PSC_JERK_Z");
+        require(std::abs(acceleration) <= shaping.acceleration_z_mps2 + 1.0e-5,
+            "Landing acceleration target must obey WPNAV_ACCEL_Z");
+        require(std::abs(velocity - (previous_velocity + previous_acceleration * dt)) < 1.0e-5,
+            "Landing velocity target must integrate the jerk-limited acceleration");
+        previous_velocity = velocity;
+        previous_acceleration = acceleration;
+    }
+    require(std::abs(backend.landing_velocity_target_up_mps() + phase.land_speed_mps) < 1.0e-2,
+        "Landing velocity target must settle at LAND_SPEED");
+}
+
 
 }  // namespace
 
@@ -308,8 +368,10 @@ int main()
     horizontal_feedback_is_limited_only_by_lean_angle();
     position_3d_uses_target_heading_for_tilt();
     position_shaping_respects_speed_acceleration_and_stops();
+    position_feedback_is_added_after_shaping_speed_limit();
     disabled_position_shaping_passes_target_directly();
     flight_phases_spool_land_and_reset();
+    landing_descent_velocity_obeys_acceleration_and_jerk_limits();
     std::cout << "ap_position_control_backends_smoke: PASS\n";
     return 0;
 }

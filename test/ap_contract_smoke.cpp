@@ -45,6 +45,16 @@ int main(int argc, char** argv) {
     without_optional = std::regex_replace(
         without_optional, std::regex(",?\\s*\\\"ATC_RATE_FF_ENAB\\\"\\s*:\\s*0"), "");
     const auto defaults = loader.load_from_text(without_optional);
+    assert(defaults.ekf.debug_csv.empty());
+    const auto debug_csv = loader.load_from_text(
+        without_optional.substr(0, without_optional.find_last_of('}')) +
+        ",\n\"ekf_debug_csv\": \"logs/ekf.csv\"\n}");
+    assert(debug_csv.ekf.debug_csv == "logs/ekf.csv");
+    assert(!defaults.rate_control.previous_rates_setpoint);
+    const auto previous_target = loader.load_from_text(
+        without_optional.substr(0, without_optional.find_last_of('}')) +
+        ",\n\"rate_control\": {\"previous_rates_setpoint\": 1}\n}");
+    assert(previous_target.rate_control.previous_rates_setpoint);
     assert(defaults.attitude_control.rate_feedforward_enabled);
     assert(std::abs(defaults.attitude_control.input_time_constant_sec - 0.15) < 1e-12);
     assert(std::abs(defaults.attitude_control.slew_yaw_rad_sec - 6000.0*cdss_to_rad) < 1e-12);

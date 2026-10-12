@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import math
 import sys
 import tempfile
 import types
@@ -213,6 +214,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
                     "gps": {"delayMsec": 100, "noise": 1},
                     "baro": {"delayMsec": 60},
                     "mag": {"delayMsec": 20},
+                    "gyro": {"noise": 3, "drift": {"mode": "ardupilot-sitl"}},
                     "imu": {"noise": 2},
                 },
             },
@@ -255,6 +257,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertEqual(config["components"]["sensors"]["gps"], {"noise": 1})
         self.assertEqual(config["components"]["sensors"]["baro"], {})
         self.assertEqual(config["components"]["sensors"]["mag"], {})
+        self.assertEqual(config["components"]["sensors"]["gyro"], {"noise": 3})
         self.assertEqual(config["components"]["sensors"]["imu"], {"noise": 2})
         self.assertTrue((self.out / "drone_config" / "drone.xml").is_file())
         for name in ("run-service.bash", "run-arducopter.bash"):
@@ -262,6 +265,8 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
         self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed"], ["gps", "baro", "mag"])
         self.assertIn("apply it twice", marker["aircraft_service_sensor_delay_reason"])
+        self.assertTrue(marker["aircraft_service_gyro_drift_removed"])
+        self.assertIn("apply it twice", marker["aircraft_service_gyro_drift_reason"])
 
     def test_missing_default_service_is_an_error(self) -> None:
         stderr = io.StringIO()
@@ -333,6 +338,25 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 60)
         self.assertAlmostEqual(drone["simulation"]["location"]["magneticField"]["declination_deg"], 15.15504, places=5)
         self.assertEqual(drone["components"]["sensors"]["gyro"]["drift"]["mode"], "ardupilot-sitl")
+        self.assertEqual(drone["components"]["sensors"]["mag"]["noise"], 0)
+        self.assertAlmostEqual(
+            drone["components"]["sensors"]["baro"]["noise"], 0.2 / math.sqrt(3.0)
+        )
+        self.assertTrue(any("pressure_alt" in note for note in drone["notes"]))
+        self.assertTrue(any("Gaussian" in note and "uniform" in note for note in drone["notes"]))
+
+    def test_sensor_noise_overrides_only_mag_and_baro(self) -> None:
+        original = {
+            "acc": {"noise": 0.03}, "gyro": {"noise": 0.04},
+            "mag": {"noise": 0.03}, "baro": {"noise": 0.01}, "gps": {"noise": 0.05},
+        }
+        drone, _ = self.run_prepare(original)
+        sensors = drone["components"]["sensors"]
+        self.assertEqual(sensors["acc"]["noise"], 0.03)
+        self.assertEqual(sensors["gyro"]["noise"], 0.04)
+        self.assertEqual(sensors["gps"]["noise"], 0.05)
+        self.assertEqual(sensors["mag"]["noise"], 0)
+        self.assertAlmostEqual(sensors["baro"]["noise"], 0.2 / math.sqrt(3.0))
 
     def test_preserves_existing_sensor_delays(self) -> None:
         drone, adapter = self.run_prepare({"gps": {"delayMsec": 25}, "baro": {"delayMsec": 60}})

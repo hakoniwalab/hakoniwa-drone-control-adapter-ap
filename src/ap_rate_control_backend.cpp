@@ -98,6 +98,8 @@ public:
     AC_PID roll;
     AC_PID pitch;
     AC_PID yaw;
+    AngularRateTarget previous_target{};
+    bool has_previous_target{false};
 };
 
 ApRateControlBackend::ApRateControlBackend(const ApRateControlBackendConfig& config)
@@ -115,6 +117,7 @@ void ApRateControlBackend::reset()
     impl_->roll.reset_filter();
     impl_->pitch.reset_filter();
     impl_->yaw.reset_filter();
+    impl_->has_previous_target = false;
 }
 
 BodyTorqueCommand ApRateControlBackend::run(const RateControlInput& input)
@@ -132,22 +135,31 @@ BodyTorqueCommand ApRateControlBackend::run(const RateControlInput& input)
         impl_->yaw.reset_I();
     }
 
+    AngularRateTarget target = input.target;
+    if (config_.previous_rates_setpoint) {
+        if (impl_->has_previous_target) {
+            target = impl_->previous_target;
+        }
+        impl_->previous_target = input.target;
+        impl_->has_previous_target = true;
+    }
+
     const BodyTorqueCommand output{
         run_axis(
             impl_->roll,
-            input.target.p,
+            target.p,
             input.rate.p,
             input.dt_sec,
             input.saturation.roll),
         run_axis(
             impl_->pitch,
-            input.target.q,
+            target.q,
             input.rate.q,
             input.dt_sec,
             input.saturation.pitch),
         run_axis(
             impl_->yaw,
-            input.target.r,
+            target.r,
             input.rate.r,
             input.dt_sec,
             input.saturation.yaw)

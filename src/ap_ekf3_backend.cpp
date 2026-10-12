@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -111,6 +113,7 @@ public:
         have_gps_ = false;
         armed_ = false;
         in_air_ = false;
+        in_air_since_usec_ = 0;
         at_rest_ = true;
     }
 
@@ -273,7 +276,9 @@ public:
 
         log_RFRH frame_header{};
         frame_header.time_us = current_time_usec_;
-        frame_header.time_flying_ms = in_air_ ? static_cast<std::uint32_t>(current_time_usec_ / 1000ULL) : 0;
+        frame_header.time_flying_ms = in_air_
+            ? static_cast<std::uint32_t>((current_time_usec_ - in_air_since_usec_) / 1000ULL)
+            : 0;
         dal_.handle_message(frame_header);
 
         log_RFRN frame_state{};
@@ -284,7 +289,11 @@ public:
         frame_state.available_memory = 1024U * 1024U;
         frame_state.vehicle_class = static_cast<std::uint8_t>(AP_DAL::VehicleClass::COPTER);
         frame_state.ekf_type = 3;
-        frame_state.armed = armed_;
+        // Hakoniwa's normal flight-state path currently supplies in_air/at_rest
+        // but not a separate arm transition.  NavEKF3's Copter flight detector
+        // treats an unarmed vehicle as certainly on ground, so in_air must imply
+        // armed when constructing the DAL replay frame.
+        frame_state.armed = armed_ || in_air_;
         frame_state.fly_forward = false;
         frame_state.takeoff_expected = in_air_;
         frame_state.touchdown_expected = !in_air_ && !at_rest_;
@@ -313,6 +322,70 @@ public:
             ekf_->UpdateFilter();
         }
         update_output();
+        write_debug_csv();
+    }
+
+    void set_debug_csv_path(const std::string& path)
+    {
+        debug_csv_.close();
+        debug_csv_.clear();
+        if (path.empty()) {
+            return;
+        }
+        debug_csv_.open(path, std::ios::out | std::ios::trunc);
+        if (!debug_csv_) {
+            throw std::runtime_error("failed to open EKF debug CSV: " + path);
+        }
+        debug_csv_ << "TimeUS,Roll,Pitch,Yaw,VN,VE,VD,PN,PE,PD,GX,GY,GZ,"
+                      "AX,AY,AZ,MN,ME,MD,MX,MY,MZ,"
+                      "IVN,IVE,IVD,IPN,IPE,IPD,IMX,IMY,IMZ,IYAW,"
+                      "SV,SP,SH,SM,YawVar,errRP,onGround,inFlight,atRest,magLearning\n";
+        debug_csv_.flush();
+    }
+
+    void write_debug_csv()
+    {
+        if (!debug_csv_ || !initialised_) {
+            return;
+        }
+        Vector3f euler{}, velocity{}, gyro_bias{}, accel_bias{}, mag_ned{}, mag_xyz{};
+        Quaternion attitude{};
+        Vector2f position_ne{}, offset{};
+        float position_d = 0.0f;
+        Vector3f velocity_innov{}, position_innov{}, mag_innov{}, mag_ratio{};
+        float tas_innov = 0.0f, yaw_innov = 0.0f;
+        float velocity_ratio = 0.0f, position_ratio = 0.0f, height_ratio = 0.0f, tas_ratio = 0.0f;
+        ekf_->getQuaternion(attitude);
+        attitude.to_euler(euler);
+        ekf_->getVelNED(velocity);
+        ekf_->getPosNE(position_ne);
+        ekf_->getPosD(position_d);
+        ekf_->getGyroBias(-1, gyro_bias);
+        ekf_->getAccelBias(-1, accel_bias);
+        ekf_->getMagNED(mag_ned);
+        ekf_->getMagXYZ(mag_xyz);
+        ekf_->getInnovations(velocity_innov, position_innov, mag_innov, tas_innov, yaw_innov);
+        ekf_->getVariances(velocity_ratio, position_ratio, height_ratio, mag_ratio, tas_ratio, offset);
+        const float magnetic_ratio = std::max({mag_ratio.x, mag_ratio.y, mag_ratio.z});
+        // NavEKF3 has no public getter for inhibitMagStates.  In heading mode the
+        // three magnetic innovations are all zero; once 3-axis fusion is active
+        // at least one is populated.  Record that observable fusion mode.
+        const bool mag_learning = mag_innov.x != 0.0f || mag_innov.y != 0.0f || mag_innov.z != 0.0f;
+        const double unavailable = std::numeric_limits<double>::quiet_NaN();
+        debug_csv_ << std::setprecision(9) << current_time_usec_ << ','
+                   << degrees(euler.x) << ',' << degrees(euler.y) << ',' << degrees(euler.z) << ','
+                   << velocity.x << ',' << velocity.y << ',' << velocity.z << ','
+                   << position_ne.x << ',' << position_ne.y << ',' << position_d << ','
+                   << degrees(gyro_bias.x) << ',' << degrees(gyro_bias.y) << ',' << degrees(gyro_bias.z) << ','
+                   << accel_bias.x << ',' << accel_bias.y << ',' << accel_bias.z << ','
+                   << mag_ned.x << ',' << mag_ned.y << ',' << mag_ned.z << ','
+                   << mag_xyz.x << ',' << mag_xyz.y << ',' << mag_xyz.z << ','
+                   << velocity_innov.x << ',' << velocity_innov.y << ',' << velocity_innov.z << ','
+                   << position_innov.x << ',' << position_innov.y << ',' << position_innov.z << ','
+                   << mag_innov.x << ',' << mag_innov.y << ',' << mag_innov.z << ',' << degrees(yaw_innov) << ','
+                   << velocity_ratio << ',' << position_ratio << ',' << height_ratio << ',' << magnetic_ratio << ','
+                   << unavailable << ',' << unavailable << ',' << (!in_air_) << ',' << in_air_ << ','
+                   << at_rest_ << ',' << mag_learning << '\n';
     }
 
     void update_output()
@@ -412,7 +485,9 @@ public:
     bool initialised_{false};
     bool armed_{false};
     bool in_air_{false};
+    std::uint64_t in_air_since_usec_{0};
     bool at_rest_{true};
+    std::ofstream debug_csv_{};
 };
 
 ApEkf3Backend::ApEkf3Backend()
@@ -425,7 +500,15 @@ ApEkf3Backend::~ApEkf3Backend() = default;
 void ApEkf3Backend::reset() { impl_->reset(); }
 void ApEkf3Backend::set_config(const EkfAdapterConfig& config) { impl_->config_ = config; }
 void ApEkf3Backend::set_armed_status(bool armed) { impl_->armed_ = armed; }
-void ApEkf3Backend::set_in_air_status(bool in_air) { impl_->in_air_ = in_air; }
+void ApEkf3Backend::set_in_air_status(bool in_air)
+{
+    if (in_air && !impl_->in_air_) {
+        impl_->in_air_since_usec_ = impl_->current_time_usec_;
+    } else if (!in_air) {
+        impl_->in_air_since_usec_ = 0;
+    }
+    impl_->in_air_ = in_air;
+}
 void ApEkf3Backend::set_vehicle_at_rest(bool at_rest) { impl_->at_rest_ = at_rest; }
 void ApEkf3Backend::set_gps_lag_sec(double lag_sec)
 {
@@ -434,6 +517,7 @@ void ApEkf3Backend::set_gps_lag_sec(double lag_sec)
     }
     impl_->gps_lag_sec_ = lag_sec;
 }
+void ApEkf3Backend::set_debug_csv_path(const std::string& path) { impl_->set_debug_csv_path(path); }
 void ApEkf3Backend::push_imu(const EkfImuInput& input, double dt_sec) { impl_->push_imu(input, dt_sec); }
 void ApEkf3Backend::push_mag(const EkfMagInput& input) { impl_->push_mag(input); }
 void ApEkf3Backend::push_baro(const EkfBaroInput& input) { impl_->push_baro(input); }

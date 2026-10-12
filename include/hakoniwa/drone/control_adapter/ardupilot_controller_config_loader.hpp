@@ -28,6 +28,7 @@ struct ArdupilotSensorFilterConfig {
 struct ArdupilotEkfConfig {
     double gps_delay_ms{0.0};
     double hgt_delay_ms{60.0};
+    std::string debug_csv{};
 };
 struct ArdupilotControllerConfig {
     ArdupilotControllerRuntimeConfig runtime{};

@@ -16,6 +16,10 @@ double optional_number(const std::string& s, const char* key, double fallback) {
     std::smatch m; const std::regex r("\\\"" + std::string(key) + "\\\"\\s*:\\s*([-+]?(?:\\d+\\.?\\d*|\\d*\\.\\d+)(?:[eE][-+]?\\d+)?)");
     return std::regex_search(s,m,r) ? std::stod(m[1].str()) : fallback;
 }
+std::string optional_string(const std::string& s, const char* key) {
+    std::smatch m; const std::regex r("\\\"" + std::string(key) + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
+    return std::regex_search(s,m,r) ? m[1].str() : std::string{};
+}
 }
 ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_file(const std::string& path) const {
     std::ifstream f(path); if (!f) throw std::runtime_error("failed to open config file: "+path);
@@ -43,6 +47,7 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     c.flight_phase.land_speed_high_mps=optional_number(s,"LAND_SPEED_HIGH",0.0);
     c.flight_phase.land_alt_low_m=optional_number(s,"LAND_ALT_LOW",10.0);
     c.ekf.gps_delay_ms=optional_number(s,"GPS1_DELAY_MS",0.0); c.ekf.hgt_delay_ms=optional_number(s,"EK3_HGT_DELAY",60.0);
+    c.ekf.debug_csv=optional_string(s,"ekf_debug_csv");
     if(!std::isfinite(c.ekf.gps_delay_ms)||c.ekf.gps_delay_ms<0||c.ekf.gps_delay_ms>250)throw std::invalid_argument("GPS1_DELAY_MS must be 0..250 (NavEKF3 limit)");
     // NavEKF3 inside the plugin runs with its default parameters; its height delay cannot be changed.
     if(c.ekf.hgt_delay_ms!=60.0)throw std::invalid_argument("EK3_HGT_DELAY must be 60 (the plugin's NavEKF3 uses the default); set the barometer delay to 60 ms instead");
@@ -70,6 +75,7 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     axis(c.rate_control.roll,"ATC_RAT_RLL_P","ATC_RAT_RLL_I","ATC_RAT_RLL_D","ATC_RAT_RLL_FF","ATC_RAT_RLL_IMAX","ATC_RAT_RLL_FLTT","ATC_RAT_RLL_FLTE","ATC_RAT_RLL_FLTD","ATC_RAT_RLL_SMAX","ATC_RAT_RLL_SRT");
     axis(c.rate_control.pitch,"ATC_RAT_PIT_P","ATC_RAT_PIT_I","ATC_RAT_PIT_D","ATC_RAT_PIT_FF","ATC_RAT_PIT_IMAX","ATC_RAT_PIT_FLTT","ATC_RAT_PIT_FLTE","ATC_RAT_PIT_FLTD","ATC_RAT_PIT_SMAX","ATC_RAT_PIT_SRT");
     axis(c.rate_control.yaw,"ATC_RAT_YAW_P","ATC_RAT_YAW_I","ATC_RAT_YAW_D","ATC_RAT_YAW_FF","ATC_RAT_YAW_IMAX","ATC_RAT_YAW_FLTT","ATC_RAT_YAW_FLTE","ATC_RAT_YAW_FLTD","ATC_RAT_YAW_SMAX","ATC_RAT_YAW_SRT");
+    c.rate_control.previous_rates_setpoint=optional_number(s,"previous_rates_setpoint",0.0)!=0.0;
     return c;
 }
 }  // namespace hakoniwa::drone::control_adapter

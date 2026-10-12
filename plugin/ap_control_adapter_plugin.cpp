@@ -230,6 +230,7 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
             // NavEKF3 through the DAL replay boundary (ap_ekf3_backend.hpp).
             auto* ekf = new adapter::ApEkf3Backend();
             ekf->set_gps_lag_sec(config.ekf.gps_delay_ms * 1.0e-3);
+            ekf->set_debug_csv_path(config.ekf.debug_csv);
             if (argument != nullptr) {
                 ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));
             }

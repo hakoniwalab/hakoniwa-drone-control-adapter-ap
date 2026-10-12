@@ -4,6 +4,7 @@
 #include <hakoniwa/drone/control_adapter/ekf_adapter.hpp>
 
 #include <memory>
+#include <string>
 
 namespace hakoniwa::drone::control_adapter {
 
@@ -29,6 +30,8 @@ public:
     void set_vehicle_at_rest(bool at_rest) override;
     // The GPS lag NavEKF3 allows for (AP_GPS::get_lag, GPS1_DELAY_MS): the vehicle's real GPS delay.
     void set_gps_lag_sec(double lag_sec);
+    // Adapter-local diagnostic output; the common IEkfAdapter stays unchanged.
+    void set_debug_csv_path(const std::string& path);
 
     void push_imu(const EkfImuInput& input, double dt_sec) override;
     void push_mag(const EkfMagInput& input) override;

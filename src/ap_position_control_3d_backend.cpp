@@ -75,6 +75,7 @@ void ApPositionControl3DBackend::reset()
     phase_time_sec_ = 0.0;
     landed_candidate_sec_ = 0.0;
     landed_maybe_ = landed_ = false;
+    landing_vel_up_mps_ = landing_accel_up_mps2_ = 0.0;
 }
 
 void ApPositionControl3DBackend::enter_phase(FlightPhase phase, const PositionControl3DPositionInput& input)
@@ -84,6 +85,8 @@ void ApPositionControl3DBackend::enter_phase(FlightPhase phase, const PositionCo
     phase_time_sec_ = 0.0;
     landed_candidate_sec_ = 0.0;
     landed_maybe_ = landed_ = false;
+    landing_vel_up_mps_ = -input.state.velocity.z;
+    landing_accel_up_mps2_ = 0.0;
     hold_x_ned_ = input.state.position.x;
     hold_y_ned_ = input.state.position.y;
     if (phase == FlightPhase::Takeoff || !std::isfinite(ground_z_ned_)) {
@@ -165,6 +168,9 @@ PositionControl3DOutput ApPositionControl3DBackend::run_takeoff(
 PositionControl3DOutput ApPositionControl3DBackend::run_landing(
     const PositionControl3DPositionInput& input, double dt_sec)
 {
+    if (!std::isfinite(dt_sec) || dt_sec <= 0.0) {
+        throw std::invalid_argument("landing control dt must be positive");
+    }
     phase_time_sec_ += dt_sec;
     if (landed_) {
         PositionControl3DOutput output{};
@@ -186,9 +192,26 @@ PositionControl3DOutput ApPositionControl3DBackend::run_landing(
         descent_speed = std::min(high_speed, std::max(flight_phase_config_.land_speed_mps,
             std::sqrt(2.0 * shaping_.acceleration_z_mps2 * excess)));
     }
+    // ArduCopter passes this climb-rate command through land_at_climb_rate_cm(),
+    // input_vel_accel_z() and shape_vel_accel().  Keep the same up-positive desired
+    // velocity/acceleration state and apply WPNAV_ACCEL_Z and PSC_JERK_Z before the
+    // vertical controller sees the landing command.
+    const float dt = static_cast<float>(dt_sec);
+    float shaped_velocity = static_cast<float>(landing_vel_up_mps_);
+    float shaped_acceleration = static_cast<float>(landing_accel_up_mps2_);
+    update_vel_accel(shaped_velocity, shaped_acceleration, dt, 0.0f, 0.0f);
+    shape_vel_accel(-static_cast<float>(descent_speed), 0.0f,
+                    shaped_velocity, shaped_acceleration,
+                    -static_cast<float>(shaping_.acceleration_z_mps2),
+                    static_cast<float>(shaping_.acceleration_z_mps2),
+                    static_cast<float>(shaping_.jerk_z_mps3), dt, true);
+    landing_vel_up_mps_ = shaped_velocity;
+    landing_accel_up_mps2_ = shaped_acceleration;
+    altitude_.set_acceleration_feedforward(landing_accel_up_mps2_);
+
     AltitudeControlInput altitude{};
     altitude.mode = AltitudeControlMode::Velocity;
-    altitude.target_velocity.vz = -descent_speed;
+    altitude.target_velocity.vz = landing_vel_up_mps_;
     HorizontalPositionControlInput horizontal{};
     horizontal.mode = HorizontalControlMode::Position;
     horizontal.target_position = {hold_x_ned_, hold_y_ned_};

@@ -79,6 +79,33 @@ void verifies_landed_resets_integrator()
     assert(near(backend.run(input).x, 0.0));
 }
 
+void verifies_previous_rates_setpoint_option()
+{
+    adapter::ApRateControlBackendConfig delayed_config{};
+    delayed_config.roll = {};
+    delayed_config.roll.p = 1.0;
+    delayed_config.roll.i = 0.0;
+    delayed_config.roll.d = 0.0;
+    delayed_config.previous_rates_setpoint = true;
+    adapter::ApRateControlBackend delayed(delayed_config);
+    adapter::RateControlInput input{};
+    input.dt_sec = 0.01;
+    input.target.p = 1.0;
+    assert(near(delayed.run(input).x, 1.0));
+    input.target.p = 2.0;
+    assert(near(delayed.run(input).x, 1.0));
+    delayed.reset();
+    input.target.p = 3.0;
+    assert(near(delayed.run(input).x, 3.0));
+
+    delayed_config.previous_rates_setpoint = false;
+    adapter::ApRateControlBackend current(delayed_config);
+    input.target.p = 1.0;
+    assert(near(current.run(input).x, 1.0));
+    input.target.p = 2.0;
+    assert(near(current.run(input).x, 2.0));
+}
+
 }  // namespace
 
 int main()
@@ -87,6 +114,7 @@ int main()
     verifies_feed_forward_matches_ardupilot_motor_input_sum();
     verifies_saturation_prevents_integrator_growth();
     verifies_landed_resets_integrator();
+    verifies_previous_rates_setpoint_option();
     std::cout << "ap_rate_control_backend_smoke: PASS\n";
     return 0;
 }

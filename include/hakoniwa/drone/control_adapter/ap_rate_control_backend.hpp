@@ -26,6 +26,10 @@ struct ApRateControlBackendConfig {
     ApRateControlAxisConfig roll{};
     ApRateControlAxisConfig pitch{};
     ApRateControlAxisConfig yaw{};
+    // ArduCopter runs the rate controller before update_flight_mode computes
+    // this loop's body-rate target. Off preserves the adapter's original
+    // same-cycle behavior; on uses the preceding call's target after the first call.
+    bool previous_rates_setpoint{false};
 };
 
 struct ApRateControlAxisStatus {
