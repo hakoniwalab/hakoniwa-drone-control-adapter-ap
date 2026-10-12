@@ -307,6 +307,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
     def test_sensor_update_periods_configure_gps_and_record_unavailable_sensors(self) -> None:
         tuned_path = self.runtime / "drone_config_0.json"
         tuned = json.loads(tuned_path.read_text())
+        tuned["simulation"]["timeStep"] = 0.001
         sensors = tuned["components"]["sensors"]
         sensors.setdefault("acc", {})["updatePeriodMsec"] = 4
         sensors["gyro"]["updatePeriodMsec"] = 4
@@ -335,6 +336,44 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertIn("SIM_GPS_HZ,5\n", (self.out / "sitl.parm").read_text())
         marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
         self.assertFalse(marker["sensor_update_periods"]["gps"]["configured"])
+
+    def test_update_period_requires_json_integer_step_multiple_and_bounded_value(self) -> None:
+        base = {"simulation": {"timeStep": 0.003}, "components": {"sensors": {"gps": {}}}}
+        for value in (True, "100", 100.0, 0, -1):
+            config = json.loads(json.dumps(base))
+            config["components"]["sensors"]["gps"]["updatePeriodMsec"] = value
+            with self.assertRaisesRegex(RuntimeError, "must be a positive integer"):
+                SETUP.sensor_update_period_msec(config, "gps")
+
+        config = json.loads(json.dumps(base))
+        config["components"]["sensors"]["gps"]["updatePeriodMsec"] = 100
+        with self.assertRaisesRegex(RuntimeError, "multiple of simulation.timeStep"):
+            SETUP.sensor_update_period_msec(config, "gps")
+
+        config["components"]["sensors"]["gps"]["updatePeriodMsec"] = 3_600_001
+        with self.assertRaisesRegex(RuntimeError, "must not exceed 3600000 ms"):
+            SETUP.sensor_update_period_msec(config, "gps")
+
+    def test_non_integral_gps_frequency_rounds_to_ap_int8_and_warns(self) -> None:
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        tuned["components"]["sensors"]["gps"]["updatePeriodMsec"] = 150
+        tuned_path.write_text(json.dumps(tuned))
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.run_setup(self.service), 0)
+
+        self.assertIn("SIM_GPS_HZ,7\n", (self.out / "sitl.parm").read_text())
+        self.assertIn("150 ms cannot be represented exactly", stderr.getvalue())
+        self.assertIn("using 7 Hz", stderr.getvalue())
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertEqual(marker["sensor_update_periods"]["gps"]["effective_hz"], 7)
+
+        self.assertEqual(SETUP.ardupilot_gps_hz(1)[0], 127)
+        self.assertIn("AP_Int8", SETUP.ardupilot_gps_hz(1)[1])
+        self.assertEqual(SETUP.ardupilot_gps_hz(3_600_000)[0], 1)
+        self.assertIn("AP_Int8", SETUP.ardupilot_gps_hz(3_600_000)[1])
 
     def test_no_drift_forces_zero_and_declination_mismatch_warns(self) -> None:
         tuned_path = self.runtime / "drone_config_0.json"

@@ -62,6 +62,9 @@ MAVLINK_PORT = 14550
 # accel filter for it.
 SITL_DECLARED_ACCEL_HZ = 1000.0
 ARDUPILOT_DEFAULT_ACCEL_FILTER_HZ = 10.0
+MAX_SENSOR_UPDATE_PERIOD_MSEC = 3_600_000
+ARDUPILOT_GPS_HZ_MIN = 1
+ARDUPILOT_GPS_HZ_MAX = 127  # SIM_GPS_HZ is AP_Int8 (libraries/SITL/SITL.h)
 
 
 def read_parm(path: Path, name: str) -> float | None:
@@ -82,16 +85,42 @@ def sensor_noise(drone_config: dict, sensor: str) -> float:
     return float(drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("noise", 0.0))
 
 
-def sensor_update_period_msec(drone_config: dict, sensor: str) -> float | None:
+def sensor_update_period_msec(drone_config: dict, sensor: str) -> int | None:
     value = drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("updatePeriodMsec")
     if value is None:
         return None
-    period = float(value)
-    if not math.isfinite(period) or period <= 0.0 or not period.is_integer():
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise RuntimeError(
             f"components.sensors.{sensor}.updatePeriodMsec must be a positive integer"
         )
-    return period
+    if value > MAX_SENSOR_UPDATE_PERIOD_MSEC:
+        raise RuntimeError(
+            f"components.sensors.{sensor}.updatePeriodMsec must not exceed "
+            f"{MAX_SENSOR_UPDATE_PERIOD_MSEC} ms"
+        )
+    simulation_step_usec = math.floor(
+        float(drone_config["simulation"]["timeStep"]) * 1_000_000 + 0.5
+    )
+    if simulation_step_usec <= 0:
+        raise RuntimeError("simulation.timeStep must be greater than zero")
+    if value * 1000 % simulation_step_usec != 0:
+        raise RuntimeError(
+            f"components.sensors.{sensor}.updatePeriodMsec must be a multiple of simulation.timeStep"
+        )
+    return value
+
+
+def ardupilot_gps_hz(period_msec: int) -> tuple[int, str | None]:
+    """Map a period to the nearest usable AP_Int8 SIM_GPS_HZ value."""
+    requested_hz = 1000.0 / period_msec
+    rounded_hz = math.floor(requested_hz + 0.5)
+    effective_hz = min(max(rounded_hz, ARDUPILOT_GPS_HZ_MIN), ARDUPILOT_GPS_HZ_MAX)
+    if math.isclose(requested_hz, effective_hz, rel_tol=0.0, abs_tol=1e-12):
+        return effective_hz, None
+    return effective_hz, (
+        f"components.sensors.gps.updatePeriodMsec {period_msec} ms cannot be represented "
+        f"exactly by ArduPilot SIM_GPS_HZ (AP_Int8); using {effective_hz} Hz"
+    )
 
 
 def ardupilot_sensor_parameters(drone_config: dict) -> tuple[dict[str, float], list[str]]:
@@ -230,11 +259,11 @@ def main() -> int:
         raise RuntimeError(
             "components.sensors.acc.updatePeriodMsec and gyro.updatePeriodMsec must be equal"
         )
-    configured_gps_hz = (
-        1000.0 / update_periods["gps"]
-        if update_periods["gps"] is not None
-        else None
-    )
+    configured_gps_hz = None
+    if update_periods["gps"] is not None:
+        configured_gps_hz, gps_rate_warning = ardupilot_gps_hz(update_periods["gps"])
+        if gps_rate_warning is not None:
+            sensor_warnings.append(gps_rate_warning)
     requested_gps_hz = args.gps_hz if args.gps_hz is not None else 5.0
     if configured_gps_hz is not None and args.gps_hz is not None \
             and not math.isclose(configured_gps_hz, args.gps_hz, rel_tol=0.0, abs_tol=1e-9):
