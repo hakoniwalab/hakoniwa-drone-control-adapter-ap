@@ -144,6 +144,15 @@ class ExportArduPilotParamsTest(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "must be equal"):
             self.run_export()
 
+    def test_warns_but_exports_control_gain_outside_ardupilot_range(self) -> None:
+        self.params["PID_ALT_Kp"] = 0.5
+        (self.runtime / "controller.txt").write_text(
+            "".join(f"{key} {value}\n" for key, value in self.params.items()), encoding="utf-8"
+        )
+        values, stderr = self.run_export()
+        self.assertEqual(values["PSC_POSZ_P"], 0.5)
+        self.assertIn("WARNING: PSC_POSZ_P=0.5 is outside ArduPilot's range 1..3", stderr)
+
     def test_horizontal_acceleration_comes_from_half_tilt_limit(self) -> None:
         self.params["PID_POS_MAX_ROLL"] = 25.0
         self.params["PID_POS_MAX_PITCH"] = 25.0
@@ -225,9 +234,10 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertTrue((self.out / "params.parm").is_file())
         sitl_values = [line for line in (self.out / "sitl.parm").read_text().splitlines()
                        if line and not line.startswith("#")]
-        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "SIM_SPEEDUP,1", "SIM_GPS_HZ,7",
+        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "SIM_SPEEDUP,1", "LOG_BITMASK,180223", "SIM_GPS_HZ,7",
                                        "INS_ACCEL_FILTER,30", "SIM_GPS_LAG_MS,100",
                                        "SIM_BARO_DELAY,60"])
+        self.assertNotIn("LOG_BITMASK", (self.out / "params.parm").read_text())
         config = json.loads((self.out / "drone_config" / "drone_config_0.json").read_text())
         self.assertEqual(config["simulation"]["timeStep"], 0.003)
         self.assertEqual(config["simulation"]["mavlink_tx_period_msec"]["hil_sensor"], 3)
@@ -269,11 +279,14 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.output = self.base / "output"
         self.source.mkdir()
 
-    def run_prepare(self, sensors: dict | None = None) -> tuple[dict, dict]:
+    def run_prepare(self, sensors: dict | None = None, prop_inch: int | None = None,
+                    model_xml: str | None = None) -> tuple[dict, dict]:
         source_config = {"components": {"sensors": sensors or {}}}
         (self.source / "drone_config_0.json").write_text(json.dumps(source_config))
         (self.source / "controller-params.txt").write_text("")
-        (self.source / "drone.xml").write_text("model")
+        (self.source / "drone.xml").write_text(model_xml or (
+            '<mujoco><worldbody><body><geom name="prop1_geom" type="cylinder" '
+            'size="0.127 0.0015"/></body></worldbody></mujoco>'))
 
         def fake_px4_prepare(command, check, cwd):
             self.output.mkdir()
@@ -288,6 +301,8 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
             "tuning.px4.conversion.native_params": native,
         }
         argv = ["prepare", "--pro-root", str(self.base), str(self.source), str(self.output)]
+        if prop_inch is not None:
+            argv[1:1] = ["--prop-inch", str(prop_inch)]
         model = {"thrust_hover": 0.42, "hover_duty": 0.5}
         with patch.dict(sys.modules, modules), patch.object(sys, "argv", argv), \
              patch.object(PREPARE.subprocess, "run", side_effect=fake_px4_prepare), \
@@ -308,6 +323,33 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         drone, adapter = self.run_prepare({"gps": {"delayMsec": 25}, "baro": {"delayMsec": 60}})
         self.assertEqual(drone["components"]["sensors"]["gps"]["delayMsec"], 25)
         self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 25)
+
+    def test_x500_propeller_model_produces_mission_planner_initial_parameters(self) -> None:
+        _, adapter = self.run_prepare()
+        expected = {
+            "INS_GYRO_FILTER": 42, "INS_ACCEL_FILTER": 20,
+            "ATC_RAT_RLL_FLTD": 21, "ATC_RAT_RLL_FLTT": 21, "ATC_RAT_RLL_FLTE": 0,
+            "ATC_RAT_PIT_FLTD": 21, "ATC_RAT_PIT_FLTT": 21, "ATC_RAT_PIT_FLTE": 0,
+            "ATC_RAT_YAW_FLTD": 0, "ATC_RAT_YAW_FLTE": 2, "ATC_RAT_YAW_FLTT": 21,
+            "ATC_ACCEL_R_MAX": 116700, "ATC_ACCEL_P_MAX": 116700,
+            "ATC_ACCEL_Y_MAX": 27000,
+        }
+        for key, value in expected.items():
+            self.assertEqual(adapter["parameters"][key], value)
+        notes = adapter["initial_parameters"]
+        self.assertEqual(notes["propeller_diameter_inch"], 10)
+        self.assertIn("InitialParamsCalculator.cs", notes["source"])
+        self.assertIn("INS_GYRO_FILTER", notes["formulas"])
+
+    def test_explicit_propeller_size_is_used_when_model_has_no_propeller(self) -> None:
+        _, adapter = self.run_prepare(prop_inch=10, model_xml="<mujoco/>")
+        self.assertEqual(adapter["parameters"]["INS_GYRO_FILTER"], 42)
+
+    def test_missing_propeller_size_is_an_error(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            self.run_prepare(model_xml="<mujoco/>")
+        self.assertIn("no named propeller cylinder radius", stderr.getvalue())
 
 
 if __name__ == "__main__":

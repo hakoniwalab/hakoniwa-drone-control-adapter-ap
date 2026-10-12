@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,14 +48,10 @@ SITL_RATE_HZ = 1.0 / 0.003  # ArduCopter's main loop in SITL: every Hakoniwa phy
 # GPS 5 Hz (SIM_GPS_HZ default)
 EKF_INTERVALS_USEC = {"imuIntervalUsec": 3000, "magIntervalUsec": 20000,
                       "baroIntervalUsec": 10000, "gpsIntervalUsec": 200000}
-# ArduPilot's defaults the SITL runs with (AP_InertialSensor INS_*_FILTER, AC_AttitudeControl_Multi
-# ATC_RAT_*_FLTT/FLTD as the EAMS SITL parameter file, AC_AttitudeControl ATC_ACCEL_*_MAX)
-SITL_CONDITIONS = {
-    "INS_GYRO_FILTER": 20, "INS_ACCEL_FILTER": 10,
-    "ATC_RAT_RLL_FLTT": 10, "ATC_RAT_RLL_FLTD": 10,
-    "ATC_RAT_PIT_FLTT": 10, "ATC_RAT_PIT_FLTD": 10,
-    "ATC_ACCEL_R_MAX": 110000, "ATC_ACCEL_P_MAX": 110000, "ATC_ACCEL_Y_MAX": 27000,
-}
+# Mission Planner plugins/InitialParamsCalculator.cs calc_values() is the source of these initial
+# values. They replace the lower ArduPilot defaults because the x500 hovered with a persistent
+# approximately 5.6 Hz, +/-1.4 degree oscillation at 20/10 Hz, but not at the calculator's 42/21 Hz.
+INITIAL_PARAMETER_SOURCE = "MissionPlanner plugins/InitialParamsCalculator.cs calc_values()"
 # The interface contract test turns these off in the template; tuning runs with ArduPilot's dynamics.
 CONTRACT_TEST_ONLY_RUNTIME = ("throttle_filter_hz", "position_input_shaping")
 CONTRACT_TEST_ONLY_PARAMETERS = ("ATC_RATE_FF_ENAB",)
@@ -74,9 +72,72 @@ def parse_param_text(path: Path) -> dict[str, float]:
     return params
 
 
+def propeller_inches_from_mujoco(path: Path) -> int:
+    """Return the Mission Planner prop-size input (whole inches) from propeller cylinder radii."""
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise ValueError(f"cannot read MuJoCo model {path}: {exc}") from exc
+    radii: list[float] = []
+    for geom in root.iter("geom"):
+        name = geom.get("name", "").lower()
+        if geom.get("type") != "cylinder" or "prop" not in name or "motor" in name:
+            continue
+        size = geom.get("size", "").split()
+        try:
+            radius = float(size[0])
+        except (IndexError, ValueError):
+            continue
+        if radius > 0:
+            radii.append(radius)
+    if not radii:
+        raise ValueError(f"no named propeller cylinder radius found in {path}; use --prop-inch")
+    if not math.isclose(min(radii), max(radii), rel_tol=1e-6, abs_tol=1e-9):
+        raise ValueError(f"propeller cylinder radii are inconsistent in {path}; use --prop-inch")
+    # Mission Planner's prop-size control accepts whole inches. Match that input by rounding the
+    # MuJoCo diameter (metres) to the nearest inch rather than feeding a fractional model value.
+    prop_inch = round(2.0 * radii[0] / 0.0254)
+    if prop_inch <= 0:
+        raise ValueError(f"propeller diameter in {path} rounds to zero inches; use --prop-inch")
+    return prop_inch
+
+
+def initial_parameters(prop_inch: int) -> tuple[dict[str, int | float], dict[str, str]]:
+    if prop_inch <= 0:
+        raise ValueError("propeller diameter must be positive")
+    gyro = max(20, round(289.22 * prop_inch ** -0.838))
+    rate_filter = max(10, gyro / 2)
+    accel_rp = max(10000, round(
+        (-2.613267 * prop_inch ** 3 + 343.39216 * prop_inch ** 2
+         - 15083.7121 * prop_inch + 235771) / 100
+    ) * 100)
+    accel_y = max(8000, round((-900 * prop_inch + 36000) / 100) * 100)
+    values = {
+        "INS_GYRO_FILTER": gyro, "INS_ACCEL_FILTER": 20,
+        "ATC_RAT_RLL_FLTT": rate_filter, "ATC_RAT_RLL_FLTD": rate_filter,
+        "ATC_RAT_RLL_FLTE": 0,
+        "ATC_RAT_PIT_FLTT": rate_filter, "ATC_RAT_PIT_FLTD": rate_filter,
+        "ATC_RAT_PIT_FLTE": 0,
+        "ATC_RAT_YAW_FLTT": rate_filter, "ATC_RAT_YAW_FLTD": 0,
+        "ATC_RAT_YAW_FLTE": 2,
+        "ATC_ACCEL_R_MAX": accel_rp, "ATC_ACCEL_P_MAX": accel_rp,
+        "ATC_ACCEL_Y_MAX": accel_y,
+    }
+    formulas = {
+        "INS_GYRO_FILTER": "max(20, round(289.22 * prop_inch^-0.838))",
+        "roll/pitch FLTD,FLTT; yaw FLTT": "max(10, INS_GYRO_FILTER / 2)",
+        "roll/pitch FLTE; yaw FLTD,FLTE": "0; 0,2",
+        "ATC_ACCEL_R/P_MAX": "max(10000, round((-2.613267*p^3 + 343.39216*p^2 - 15083.7121*p + 235771) / 100) * 100)",
+        "ATC_ACCEL_Y_MAX": "max(8000, round((-900*p + 36000) / 100) * 100)",
+        "INS_ACCEL_FILTER": "20",
+    }
+    return values, formulas
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare a vehicle for ArduPilot PID tuning (SITL conditions).")
     parser.add_argument("--pro-root", required=True, help="hakoniwa-drone-pro checkout")
+    parser.add_argument("--prop-inch", type=int, help="propeller diameter in whole inches (instead of drone.xml)")
     parser.add_argument("source_dir", type=Path, help="the customer's Hakoniwa vehicle directory")
     parser.add_argument("output_dir", type=Path, help="new directory for the ArduPilot tuning inputs")
     args = parser.parse_args()
@@ -119,7 +180,19 @@ def main() -> int:
     for key in config["runtime"]:
         if key.endswith("_hz"):
             config["runtime"][key] = SITL_RATE_HZ
-    config["parameters"].update(SITL_CONDITIONS)
+    try:
+        prop_inch = (args.prop_inch if args.prop_inch is not None
+                     else propeller_inches_from_mujoco(output / "drone.xml"))
+        initial, formulas = initial_parameters(prop_inch)
+    except ValueError as exc:
+        parser.error(str(exc))
+    config["parameters"].update(initial)
+    config["initial_parameters"] = {
+        "source": INITIAL_PARAMETER_SOURCE,
+        "propeller_diameter_inch": prop_inch,
+        "formulas": formulas,
+        "reason": "x500 SITL hover oscillated at the old 20/10 Hz filters; Mission Planner's 42/21 Hz was stable",
+    }
     controller_params = parse_param_text(output / "controller-params.txt")
     model = motor_thrust_model(drone, controller_params, compute_hover_thrust_fraction)
     config["parameters"]["MOT_THST_HOVER"] = model["thrust_hover"]
@@ -127,7 +200,8 @@ def main() -> int:
     config["parameters"]["EK3_HGT_DELAY"] = delays["baro"]
     changes.append(f"EKF allowance: GPS1_DELAY_MS {delays['gps']:g}, EK3_HGT_DELAY {delays['baro']:g} (the sensor delays)")
     changes.append(f"runtime: every stage {SITL_RATE_HZ:.2f} Hz (ArduCopter's main loop in SITL)")
-    changes.append("parameters: " + ", ".join(f"{k} {v:g}" for k, v in SITL_CONDITIONS.items()))
+    changes.append(f"initial parameters: {INITIAL_PARAMETER_SOURCE}, propeller {prop_inch} inch")
+    changes.append("parameters: " + ", ".join(f"{k} {v:g}" for k, v in initial.items()))
     changes.append(f"MOT_THST_HOVER {model['thrust_hover']:.4f} from the rotor model (hover duty {model['hover_duty']:.3f})")
     (output / "ardupilot-controller-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 

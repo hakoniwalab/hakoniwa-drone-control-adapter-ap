@@ -10,7 +10,9 @@ directory with:
                      (tuning/export_ardupilot_params.py)
   sitl.parm          SITL-only parameters: no pre-arm checks (the SITL has no
                      calibration and its main loop runs at the sensor period),
-                     SIM_SPEEDUP 1 (DataFlash logs work), SITL GPS at the rate the tuning assumed,
+                     SIM_SPEEDUP 1 (DataFlash logs work), DataFlash RATE at the control period
+                     (for equivalence comparison of angular-rate targets and responses),
+                     SITL GPS at the rate the tuning assumed,
                      INS_ACCEL_FILTER scaled so the SITL's accel filter has the tuned cutoff
                      (see sitl_accel_filter_hz), and the vehicle's sensor delays
                      (components.sensors.gps/baro.delayMsec) as SIM_GPS_LAG_MS / SIM_BARO_DELAY:
@@ -154,6 +156,9 @@ def main() -> int:
         # (AP_Logger_File.cpp, timeout_ms *= sitl->speedup) and an unset value trapped the float
         # conversion, which aborted SITL with file logging on.
         "SIM_SPEEDUP,1\n"
+        # SITL only: ATTITUDE_FAST (bit 0) makes RATE available at the control period so equivalence
+        # checks can compare angular-rate targets and responses. Keep all other ArduCopter default bits.
+        "LOG_BITMASK,180223\n"
         f"SIM_GPS_HZ,{args.gps_hz:g}\n"
         f"# accel filter: {tuned_accel_filter_hz:g} Hz on the vehicle; the SITL's {1.0 / sim_step_sec:.0f} Hz IMU needs\n"
         f"# this value to get it (tools/setup_sitl_runtime.py, sitl_accel_filter_hz)\n"
