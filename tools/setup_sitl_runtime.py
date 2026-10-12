@@ -82,6 +82,18 @@ def sensor_noise(drone_config: dict, sensor: str) -> float:
     return float(drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("noise", 0.0))
 
 
+def sensor_update_period_msec(drone_config: dict, sensor: str) -> float | None:
+    value = drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("updatePeriodMsec")
+    if value is None:
+        return None
+    period = float(value)
+    if not math.isfinite(period) or period <= 0.0 or not period.is_integer():
+        raise RuntimeError(
+            f"components.sensors.{sensor}.updatePeriodMsec must be a positive integer"
+        )
+    return period
+
+
 def ardupilot_sensor_parameters(drone_config: dict) -> tuple[dict[str, float], list[str]]:
     """Convert the vehicle sensor source of truth to ArduPilot SITL parameters."""
     sensors = drone_config.get("components", {}).get("sensors", {})
@@ -168,7 +180,8 @@ def main() -> int:
     parser.add_argument("--sitl-drone-config", required=True,
                         help="directory with the vehicle's SITL drone_config_0.json (simulation.sitl) and MuJoCo model")
     parser.add_argument("--out", required=True)
-    parser.add_argument("--gps-hz", type=float, default=5.0, help="SIM_GPS_HZ (default 5, ArduPilot's default)")
+    parser.add_argument("--gps-hz", type=float, default=None,
+                        help="SIM_GPS_HZ override (default 5; gps.updatePeriodMsec takes precedence)")
     parser.add_argument("--service", help="Drone PRO's aircraft_service_ardupilot binary "
                         "(default <pro-root>/.hako/build/main_for_sample/service/aircraft_service_ardupilot)")
     args = parser.parse_args()
@@ -205,6 +218,37 @@ def main() -> int:
         print(f"WARNING: configured magnetic declination {configured_declination:g} deg differs from "
               f"ArduPilot's table {field['declination_deg']:g} deg", file=sys.stderr)
     sensor_params, sensor_warnings = ardupilot_sensor_parameters(tuned)
+    update_periods = {
+        name: sensor_update_period_msec(tuned, name)
+        for name in ("acc", "gyro", "baro", "mag", "gps")
+    }
+    if (update_periods["acc"] is None) != (update_periods["gyro"] is None):
+        raise RuntimeError(
+            "components.sensors.acc.updatePeriodMsec and gyro.updatePeriodMsec must both be set"
+        )
+    if update_periods["acc"] is not None and update_periods["acc"] != update_periods["gyro"]:
+        raise RuntimeError(
+            "components.sensors.acc.updatePeriodMsec and gyro.updatePeriodMsec must be equal"
+        )
+    configured_gps_hz = (
+        1000.0 / update_periods["gps"]
+        if update_periods["gps"] is not None
+        else None
+    )
+    requested_gps_hz = args.gps_hz if args.gps_hz is not None else 5.0
+    if configured_gps_hz is not None and args.gps_hz is not None \
+            and not math.isclose(configured_gps_hz, args.gps_hz, rel_tol=0.0, abs_tol=1e-9):
+        sensor_warnings.append(
+            f"--gps-hz {args.gps_hz:g} is overridden by components.sensors.gps.updatePeriodMsec "
+            f"({update_periods['gps']:g} ms -> {configured_gps_hz:g} Hz)"
+        )
+    effective_gps_hz = configured_gps_hz if configured_gps_hz is not None else requested_gps_hz
+    for name in ("baro", "mag"):
+        if update_periods[name] is not None:
+            sensor_warnings.append(
+                f"components.sensors.{name}.updatePeriodMsec is unused by ArduPilot SITL; "
+                "its sensor update rate cannot be configured"
+            )
     for warning in sensor_warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     sim_step_sec = float(tuned["simulation"]["timeStep"])
@@ -224,7 +268,7 @@ def main() -> int:
         # SITL only: ATTITUDE_FAST (bit 0) makes RATE available at the control period so equivalence
         # checks can compare angular-rate targets and responses. Keep all other ArduCopter default bits.
         "LOG_BITMASK,180223\n"
-        f"SIM_GPS_HZ,{args.gps_hz:g}\n"
+        f"SIM_GPS_HZ,{effective_gps_hz:g}\n"
         f"# accel filter: {tuned_accel_filter_hz:g} Hz on the vehicle; the SITL's {1.0 / sim_step_sec:.0f} Hz IMU needs\n"
         f"# this value to get it (tools/setup_sitl_runtime.py, sitl_accel_filter_hz)\n"
         f"INS_ACCEL_FILTER,{sitl_accel_filter_hz(tuned_accel_filter_hz, sim_step_sec):g}\n"
@@ -308,6 +352,25 @@ cd {out}
         },
         "compass_declination": {"parameter": "COMPASS_DEC", "value_rad": math.radians(configured_declination),
                                 "source": "simulation.location.magneticField.declination_deg"},
+        "gps_accuracy": ({
+            "configured": True,
+            "value": tuned.get("components", {}).get("sensors", {}).get("gps", {}).get("accuracy"),
+            "used_by_ardupilot_sitl": False,
+            "reason": "unused: ArduPilot SITL creates its own GPS data",
+        } if isinstance(tuned.get("components", {}).get("sensors", {}).get("gps", {}).get("accuracy"), dict)
+            else {"configured": False}),
+        "sensor_update_periods": {
+            name: ({
+                "configured": True,
+                "value_msec": value,
+                "used_by_ardupilot_sitl": name == "gps",
+                "parameter": "SIM_GPS_HZ" if name == "gps" else None,
+                "effective_hz": effective_gps_hz if name == "gps" else None,
+                "reason": ("converted to SIM_GPS_HZ" if name == "gps"
+                           else "unused: ArduPilot SITL owns this sensor update rate"),
+            } if value is not None else {"configured": False})
+            for name, value in update_periods.items()
+        },
         "warnings": sensor_warnings,
     })
     print(f"OK: {out}")

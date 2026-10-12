@@ -212,7 +212,8 @@ class SetupSitlRuntimeTest(unittest.TestCase):
             "components": {
                 "droneDynamics": {"mujoco": {"modelPath": "drone.xml"}},
                 "sensors": {
-                    "gps": {"delayMsec": 100, "noise": 1},
+                    "gps": {"delayMsec": 100, "noise": 1,
+                            "accuracy": {"horizontalM": 0.2, "verticalM": 0.3, "speedMps": 0.1}},
                     "baro": {"delayMsec": 60, "noise": 0.1},
                     "mag": {"delayMsec": 20, "noise": 10},
                     "gyro": {"noise": 3, "drift": {"mode": "ardupilot-sitl",
@@ -230,9 +231,11 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.service.write_text("binary", encoding="utf-8")
         self.out = self.base / "out"
 
-    def run_setup(self, service: Path | None = None) -> int:
+    def run_setup(self, service: Path | None = None, gps_hz: float | None = 7.0) -> int:
         argv = ["setup", "--pro-root", str(self.pro), "--profile", str(self.profile),
-                "--sitl-drone-config", str(self.source), "--out", str(self.out), "--gps-hz", "7"]
+                "--sitl-drone-config", str(self.source), "--out", str(self.out)]
+        if gps_hz is not None:
+            argv += ["--gps-hz", str(gps_hz)]
         if service is not None:
             argv += ["--service", str(service)]
 
@@ -259,7 +262,10 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertEqual(config["simulation"]["timeStep"], 0.003)
         self.assertEqual(config["simulation"]["mavlink_tx_period_msec"]["hil_sensor"], 3)
         self.assertIn("sitl", config["simulation"])
-        self.assertEqual(config["components"]["sensors"]["gps"], {"noise": 1})
+        self.assertEqual(config["components"]["sensors"]["gps"], {
+            "noise": 1,
+            "accuracy": {"horizontalM": 0.2, "verticalM": 0.3, "speedMps": 0.1},
+        })
         self.assertEqual(config["components"]["sensors"]["baro"], {"noise": 0.1})
         self.assertEqual(config["components"]["sensors"]["mag"], {"noise": 10})
         self.assertEqual(config["components"]["sensors"]["gyro"], {"noise": 3})
@@ -280,6 +286,9 @@ class SetupSitlRuntimeTest(unittest.TestCase):
                          "components.sensors.mag.noise * sqrt(3) / 100")
         self.assertEqual(marker["compass_declination"]["source"],
                          "simulation.location.magneticField.declination_deg")
+        self.assertTrue(marker["gps_accuracy"]["configured"])
+        self.assertFalse(marker["gps_accuracy"]["used_by_ardupilot_sitl"])
+        self.assertIn("ArduPilot SITL creates its own GPS", marker["gps_accuracy"]["reason"])
 
     def test_sensor_conversion_warnings_and_drift_modes(self) -> None:
         tuned_path = self.runtime / "drone_config_0.json"
@@ -294,6 +303,38 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         values = (self.out / "sitl.parm").read_text()
         self.assertIn("SIM_DRIFT_SPEED,0\n", values)
         self.assertNotIn("SIM_DRIFT_TIME", values)
+
+    def test_sensor_update_periods_configure_gps_and_record_unavailable_sensors(self) -> None:
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        sensors = tuned["components"]["sensors"]
+        sensors.setdefault("acc", {})["updatePeriodMsec"] = 4
+        sensors["gyro"]["updatePeriodMsec"] = 4
+        sensors["baro"]["updatePeriodMsec"] = 20
+        sensors["mag"]["updatePeriodMsec"] = 100
+        sensors["gps"]["updatePeriodMsec"] = 100
+        tuned_path.write_text(json.dumps(tuned))
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.run_setup(self.service, gps_hz=7.0), 0)
+
+        self.assertIn("SIM_GPS_HZ,10\n", (self.out / "sitl.parm").read_text())
+        self.assertIn("--gps-hz 7 is overridden", stderr.getvalue())
+        self.assertIn("baro.updatePeriodMsec is unused", stderr.getvalue())
+        self.assertIn("mag.updatePeriodMsec is unused", stderr.getvalue())
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertTrue(marker["sensor_update_periods"]["gps"]["used_by_ardupilot_sitl"])
+        self.assertEqual(marker["sensor_update_periods"]["gps"]["effective_hz"], 10.0)
+        self.assertFalse(marker["sensor_update_periods"]["baro"]["used_by_ardupilot_sitl"])
+        self.assertFalse(marker["sensor_update_periods"]["mag"]["used_by_ardupilot_sitl"])
+        self.assertFalse(marker["sensor_update_periods"]["acc"]["used_by_ardupilot_sitl"])
+
+    def test_unset_update_period_keeps_default_gps_rate(self) -> None:
+        self.assertEqual(self.run_setup(self.service, gps_hz=None), 0)
+        self.assertIn("SIM_GPS_HZ,5\n", (self.out / "sitl.parm").read_text())
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertFalse(marker["sensor_update_periods"]["gps"]["configured"])
 
     def test_no_drift_forces_zero_and_declination_mismatch_warns(self) -> None:
         tuned_path = self.runtime / "drone_config_0.json"
