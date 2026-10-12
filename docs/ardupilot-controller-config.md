@@ -26,6 +26,16 @@ and `landing_profile` select the ArduCopter-style handling of the caller's
 `LAND_ALT_LOW`; time, throttle fraction, speed, and altitude use seconds,
 0..1, m/s, and metres at the adapter boundary.
 
+`ARMING_DELAY_SEC` is an adapter-only setting (default 2.0 seconds), named
+after ArduCopter's compile-time constant rather than an EEPROM-backed
+ArduPilot parameter. It is therefore not written by the ArduPilot parameter
+exporter. The adapter has no arm timestamp, so it holds zero thrust and does
+not advance the takeoff trajectory for this interval starting when `Takeoff`
+is entered, before the existing spool and throttle-slew intervals. This
+matches the supported mission and Commander sequence, which requests takeoff
+immediately after arming; a takeoff requested after the vehicle has already
+been armed for some time consequently differs from ArduCopter.
+
 The implementation is independent code based on the state descriptions in
 ArduCopter `takeoff.cpp:141-203` (spool and throttle slew),
 `mode.cpp:640-664` (`land_run_vertical_control`), and

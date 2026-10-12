@@ -10,6 +10,7 @@
   "parameters": {
     "takeoff_profile": 1,
     "landing_profile": 1,
+    "ARMING_DELAY_SEC": 2.0,
     "MOT_SPOOL_TIME": 0.5,
     "TKOFF_SLEW_TIME": 2.0,
     "TKOFF_THR_MAX": 0.9,

@@ -59,6 +59,7 @@ class ExportArduPilotParamsTest(unittest.TestCase):
             "".join(f"{key} {value}\n" for key, value in self.params.items()), encoding="utf-8"
         )
         adapter_params = {
+            "ARMING_DELAY_SEC": 2.0,
             "INS_GYRO_FILTER": 42,
             "PSC_VELZ_IMAX": 1.2,
             "PSC_VELXY_IMAX": 2.3,
@@ -141,6 +142,7 @@ class ExportArduPilotParamsTest(unittest.TestCase):
         }
         for key, value in expected.items():
             self.assertAlmostEqual(values[key], value)
+        self.assertNotIn("ARMING_DELAY_SEC", values)
         self.assertIn("WARNING:", stderr)
         self.assertIn("differs from the SITL period 0.003 s", stderr)
 

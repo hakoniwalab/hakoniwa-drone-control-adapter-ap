@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     f.allocation_status.unallocated_torque_x=.1; assert(feedback.run(f).roll.positive); feedback.reset();
     assert(argc == 2); ArdupilotControllerConfigLoader loader;
     const auto c=loader.load_from_file(argv[1]); assert(c.altitude_control.hover_thrust == .35);
+    assert(c.flight_phase.arming_delay_sec == 2.0);
     assert(c.ekf.gps_delay_ms >= 0.0 && c.ekf.gps_delay_ms <= 250.0);
     assert(c.ekf.hgt_delay_ms == 60.0);
     assert(c.rate_control.roll.p > 0 && c.rate_control.pitch.p > 0 && c.rate_control.yaw.p > 0);
@@ -48,6 +49,9 @@ int main(int argc, char** argv) {
     assert(std::abs(defaults.attitude_control.input_time_constant_sec - 0.15) < 1e-12);
     assert(std::abs(defaults.attitude_control.slew_yaw_rad_sec - 6000.0*cdss_to_rad) < 1e-12);
     assert(std::abs(defaults.altitude_control.throttle_filter_hz - 2.0) < 1e-12);
+    std::string without_arming_delay = std::regex_replace(
+        config, std::regex(",?\\s*\\\"ARMING_DELAY_SEC\\\"\\s*:\\s*[-+0-9.eE]+"), "");
+    assert(loader.load_from_text(without_arming_delay).flight_phase.arming_delay_sec == 2.0);
     std::string without_delays = std::regex_replace(
         config, std::regex(",?\\s*\\\"GPS1_DELAY_MS\\\"\\s*:\\s*[-+0-9.eE]+"), "");
     without_delays = std::regex_replace(

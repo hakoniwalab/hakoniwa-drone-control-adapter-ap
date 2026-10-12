@@ -35,6 +35,7 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     if(!(c.position_shaping.acceleration_xy_mps2>=0)||!(c.position_shaping.acceleration_z_mps2>0)||!(c.position_shaping.jerk_xy_mps3>0)||!(c.position_shaping.jerk_z_mps3>0))throw std::invalid_argument("WPNAV_ACCEL must be >= 0; WPNAV_ACCEL_Z, PSC_JERK_XY and PSC_JERK_Z must be positive");
     c.flight_phase.takeoff_profile=optional_number(s,"takeoff_profile",1.0)!=0.0;
     c.flight_phase.landing_profile=optional_number(s,"landing_profile",1.0)!=0.0;
+    c.flight_phase.arming_delay_sec=optional_number(s,"ARMING_DELAY_SEC",2.0);
     c.flight_phase.motor_spool_time_sec=optional_number(s,"MOT_SPOOL_TIME",0.5);
     c.flight_phase.takeoff_slew_time_sec=optional_number(s,"TKOFF_SLEW_TIME",2.0);
     c.flight_phase.takeoff_throttle_max=optional_number(s,"TKOFF_THR_MAX",0.9);

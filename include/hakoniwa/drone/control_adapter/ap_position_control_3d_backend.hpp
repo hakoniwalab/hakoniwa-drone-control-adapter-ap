@@ -28,6 +28,7 @@ struct ApPositionShapingConfig {
 struct ApFlightPhaseConfig {
     bool takeoff_profile{true};
     bool landing_profile{true};
+    double arming_delay_sec{2.0};           // ARMING_DELAY_SEC adapter constant (not an AP_Param)
     double motor_spool_time_sec{0.5};       // MOT_SPOOL_TIME
     double takeoff_slew_time_sec{2.0};      // TKOFF_SLEW_TIME
     double takeoff_throttle_max{0.9};       // TKOFF_THR_MAX

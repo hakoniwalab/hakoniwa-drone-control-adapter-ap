@@ -50,7 +50,7 @@ ApPositionControl3DBackend::ApPositionControl3DBackend(
             throw std::invalid_argument("ArduPilot position shaping limits must be positive");
         }
     }
-    const double phase_limits[]{flight_phase.motor_spool_time_sec, flight_phase.takeoff_slew_time_sec,
+    const double phase_limits[]{flight_phase.arming_delay_sec, flight_phase.motor_spool_time_sec, flight_phase.takeoff_slew_time_sec,
                                 flight_phase.takeoff_throttle_max, flight_phase.land_speed_mps,
                                 flight_phase.land_speed_high_mps, flight_phase.land_alt_low_m};
     for (double value : phase_limits) {
@@ -98,7 +98,22 @@ PositionControl3DOutput ApPositionControl3DBackend::run_takeoff(
     const PositionControl3DPositionInput& input, double dt_sec)
 {
     phase_time_sec_ += dt_sec;
-    if (phase_time_sec_ <= flight_phase_config_.motor_spool_time_sec) {
+    if (phase_time_sec_ <= flight_phase_config_.arming_delay_sec) {
+        // ArduCopter keeps the motor interlock off for ARMING_DELAY_SEC after arming.  The common
+        // contract does not expose the arm timestamp, so this adapter starts that delay on entry
+        // to Takeoff.  This matches the supported mission/Commander sequence (takeoff immediately
+        // after arm), but intentionally differs if Takeoff is requested long after arming.
+        altitude_.reset();
+        horizontal_.reset();
+        PositionControl3DOutput output{};
+        output.target_attitude = from_euler(0.0, 0.0, input.target_yaw_rad.value_or(input.state.yaw_rad));
+        output.thrust.body_z = 0.0;
+        output.target_yaw_rate_rad_sec = input.target_yaw_rate_rad_sec;
+        return output;
+    }
+
+    const double takeoff_elapsed = phase_time_sec_ - flight_phase_config_.arming_delay_sec;
+    if (takeoff_elapsed <= flight_phase_config_.motor_spool_time_sec) {
         // ArduCopter takeoff.cpp waits for THROTTLE_UNLIMITED while relaxing its position
         // controllers.  The adapter has no spool-state output, so this interval is represented by
         // zero collective thrust and a level attitude.  Interlock and motor spool feedback are not
@@ -114,7 +129,7 @@ PositionControl3DOutput ApPositionControl3DBackend::run_takeoff(
 
     // ArduCopter takeoff.cpp raises throttle over TKOFF_SLEW_TIME and limits it to
     // TKOFF_THR_MAX.  This is an independently written output cap in throttle units.
-    const double slew_elapsed = phase_time_sec_ - flight_phase_config_.motor_spool_time_sec;
+    const double slew_elapsed = takeoff_elapsed - flight_phase_config_.motor_spool_time_sec;
     const double throttle_cap = flight_phase_config_.takeoff_throttle_max *
         std::clamp(slew_elapsed / flight_phase_config_.takeoff_slew_time_sec, 0.0, 1.0);
     // Do not advance the open-loop jerk-limited position trajectory while the

@@ -240,12 +240,18 @@ void flight_phases_spool_land_and_reset()
     horizontal.velocity_error_filter_hz = horizontal.velocity_derivative_filter_hz = 0.0;
     adapter::ApPositionShapingConfig shaping{true, 2.5, 5.0, 2.5, 5.0};
     adapter::ApFlightPhaseConfig phase{};
+    phase.arming_delay_sec = 2.0;
     adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping, phase);
 
     adapter::PositionControl3DPositionInput input{};
     input.flight_phase = adapter::FlightPhase::Takeoff;
     input.target_position.z = -5.0;
     constexpr double dt = 0.01;
+    for (int i = 0; i < 200; ++i) {
+        require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
+            "Takeoff arming delay must command zero thrust");
+    }
+    input.state.position.z = -0.25;
     for (int i = 0; i < 50; ++i) {
         require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
             "Takeoff spool interval must command zero thrust");
@@ -260,7 +266,6 @@ void flight_phases_spool_land_and_reset()
     // While the slew cap is below hover the target trajectory must remain at
     // the ground.  Otherwise it runs ahead while the vehicle cannot climb and
     // the controller asks for the cap continuously once lift becomes possible.
-    input.state.position.z = -0.25;
     for (int i = 0; i < 60; ++i) {
         (void)backend.run_position(input, dt);
     }
