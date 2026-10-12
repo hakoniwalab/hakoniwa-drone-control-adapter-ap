@@ -19,6 +19,7 @@ PWM_MIN = 1000
 PWM_MAX = 2000
 SPIN_MIN = 0.15  # ArduPilot defaults (AP_MotorsMulticopter.h)
 SPIN_MAX = 0.95
+SPIN_ARM = 0.10
 
 
 def motor_thrust_model(
@@ -53,4 +54,14 @@ def motor_thrust_model(
         "thrust_hover": thrust_hover,
         "expo": min(1.0, max(0.0, raw_expo)),
         "raw_expo": raw_expo,
+        # Adapter-only values for reproducing ground-idle Duty as T/T_hover.
+        "spin_arm": SPIN_ARM,
+        "spin_min": SPIN_MIN,
+        "spin_max": SPIN_MAX,
+        "motor_model_a_coef": a_coef,
+        "motor_model_b_coef": b_coef,
+        "motor_nominal_voltage": v_bat,
+        "motor_hover_omega": math.sqrt(thrust_at_duty(hover_duty)) * omega_max,
+        "spin_arm_thrust_hover": thrust_at_duty(SPIN_ARM) / thrust_at_duty(hover_duty),
+        "spin_min_thrust_hover": thrust_at_duty(SPIN_MIN) / thrust_at_duty(hover_duty),
     }

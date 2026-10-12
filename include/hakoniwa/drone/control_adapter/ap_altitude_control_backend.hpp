@@ -33,6 +33,7 @@ public:
     explicit ApAltitudeControlBackend(const ApAltitudeControlBackendConfig& = {});
     ~ApAltitudeControlBackend() override;
     void reset() override;
+    void initialize_from_throttle(const AltitudeControlInput& input, double throttle);
     NormalizedVerticalThrustCommand run(const AltitudeControlInput&, double dt_sec) override;
     void set_config(const ApAltitudeControlBackendConfig&);
     void set_motor_limits_source(std::shared_ptr<const ApMotorThrottleLimits> source) { motor_limits_ = std::move(source); }

@@ -11,6 +11,8 @@ namespace hakoniwa::drone::control_adapter {
 struct ApControlAllocationBackendConfig {
     double throttle_rpy_mix{0.5};
     double yaw_headroom{0.2};
+    // Adapter ground-idle ceiling in T/T_hover. Zero keeps legacy allocation.
+    double ground_idle_thrust_max{0.0};
 };
 
 class ApControlAllocationBackend final : public IControlAllocationBackend {

@@ -254,7 +254,8 @@ void flight_phases_spool_land_and_reset()
     altitude.velocity_i = altitude.velocity_d = altitude.velocity_feed_forward = 0.0;
     altitude.velocity_filter_hz = altitude.velocity_derivative_filter_hz = 0.0;
     altitude.acceleration_p = 0.2;
-    altitude.acceleration_i = altitude.acceleration_d = altitude.acceleration_feed_forward = 0.0;
+    altitude.acceleration_i = 0.1;
+    altitude.acceleration_d = altitude.acceleration_feed_forward = 0.0;
     altitude.acceleration_target_filter_hz = altitude.acceleration_error_filter_hz = 0.0;
     altitude.acceleration_derivative_filter_hz = 0.0;
     altitude.hover_thrust = 0.5;
@@ -280,24 +281,41 @@ void flight_phases_spool_land_and_reset()
     input.state.position.z = -0.25;
     for (int i = 0; i < 50; ++i) {
         require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
-            "Takeoff spool interval must command zero thrust");
+            "Takeoff spool interval must command zero normalized thrust");
     }
     adapter::PositionControl3DOutput early_slew{};
     for (int i = 0; i < 10; ++i) {
         early_slew = backend.run_position(input, dt);
     }
-    require(early_slew.thrust.body_z <= 0.0 && early_slew.thrust.body_z > -0.11,
-        "Takeoff throttle must stay under the configured early slew cap");
+    // get_throttle_in()/set_throttle_out use normalized thrust before
+    // MOT_THST_EXPO and MOT_SPIN_MIN/MAX.  ArduCopter adds dt/TKOFF_SLEW_TIME;
+    // TKOFF_THR_MAX is an exit threshold, not a slew-rate multiplier.
+    require(std::abs(early_slew.thrust.body_z + 0.1) < 1.0e-9,
+        "Takeoff throttle slew must rise at 1/TKOFF_SLEW_TIME in normalized thrust units");
 
-    // While the slew cap is below hover the target trajectory must remain at
-    // the ground.  Otherwise it runs ahead while the vehicle cannot climb and
-    // the controller asks for the cap continuously once lift becomes possible.
-    for (int i = 0; i < 60; ++i) {
+    // ArduCopter does not start the takeoff path merely because the slew has
+    // crossed hover.  It keeps land_complete set until motion is detected (or
+    // 90% throttle is reached), resetting the z controller on every cycle.
+    for (int i = 0; i < 115; ++i) {
         (void)backend.run_position(input, dt);
     }
+    const auto above_hover_but_landed = backend.run_position(input, dt);
+    require(above_hover_but_landed.thrust.body_z < -1.25,
+        "Takeoff must keep slewing throttle after crossing hover while no motion is detected");
+
+    input.target_yaw_rad = pi;
+    input.target_yaw_rate_rad_sec = 1.0;
+    input.state.velocity.z = -0.7;
+    input.state.acceleration.z = -1.2;
+    const auto liftoff_detection = backend.run_position(input, dt);
+    require(std::abs(liftoff_detection.target_attitude.z) < 1.0e-12 &&
+            liftoff_detection.target_yaw_rate_rad_sec.value_or(1.0) == 0.0,
+        "Ground takeoff must hold current yaw with zero heading rate");
     const auto first_flying = backend.run_position(input, dt);
-    require(first_flying.thrust.body_z > -1.2,
-        "Takeoff trajectory must start near the vehicle when the slew reaches hover");
+    require(first_flying.target_attitude.z > 0.5,
+        "Takeoff must accept the guided yaw target on the cycle after liftoff detection");
+    require(std::abs(first_flying.thrust.body_z - liftoff_detection.thrust.body_z) < 0.03,
+        "First closed-loop altitude output must continue the takeoff throttle slew with measured acceleration");
 
     input.flight_phase = adapter::FlightPhase::Normal;
     input.target_position = {};
@@ -358,6 +376,91 @@ void landing_descent_velocity_obeys_acceleration_and_jerk_limits()
         "Landing velocity target must settle at LAND_SPEED");
 }
 
+void ground_motor_duty_uses_rotor_model_without_changing_flight_thrust()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    altitude.hover_thrust = 0.5;
+    altitude.throttle_filter_hz = 0.0;
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    adapter::ApPositionShapingConfig shaping{false};
+    adapter::ApFlightPhaseConfig phase{};
+    phase.arming_delay_sec = 0.02;
+    phase.motor_spool_time_sec = 0.10;
+    phase.ground_motor_output = true;
+    phase.motor_spin_arm = 0.10;
+    phase.motor_spin_min = 0.15;
+    phase.motor_spin_max = 0.95;
+    phase.motor_thrust_expo = 0.5;
+    // omega = voltage*duty/b = 10*duty; hover omega=5, hence
+    // T/T_hover=(2*duty)^2.
+    phase.motor_model_a_coef = 0.0;
+    phase.motor_model_b_coef = 1.0;
+    phase.motor_nominal_voltage = 10.0;
+    phase.motor_hover_omega = 5.0;
+    adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping, phase);
+
+    adapter::PositionControl3DPositionInput input{};
+    input.flight_phase = adapter::FlightPhase::Takeoff;
+    input.target_position.z = -5.0;
+    constexpr double dt = 0.01;
+    require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
+        "Interlock delay must remain SHUT_DOWN even with ground motor output enabled");
+    (void)backend.run_position(input, dt);
+    adapter::PositionControl3DOutput spool{};
+    for (int i = 0; i < 10; ++i) {
+        spool = backend.run_position(input, dt);
+    }
+    require(std::abs(spool.thrust.body_z + 0.09) < 1.0e-9,
+        "End of GROUND_IDLE spool must equal rotor thrust at MOT_SPIN_MIN");
+
+    // throttle=0.005 -> curve=(-0.5+sqrt(0.26)), actuator=0.15+0.8*curve,
+    // then the rotor model converts Duty to T/T_hover.
+    const auto first_flight_thrust = backend.run_position(input, dt);
+    const double curve = -0.5 + std::sqrt(0.26);
+    const double duty = 0.15 + 0.8 * curve;
+    require(std::abs(first_flight_thrust.thrust.body_z + 4.0 * duty * duty) < 1.0e-6,
+        "Takeoff slew must pass through MOT_THST_EXPO, spin range and rotor model");
+
+    auto limits = std::make_shared<adapter::ApMotorThrottleLimits>();
+    limits->lower = true;
+    backend.set_motor_limits_source(limits);
+    input.flight_phase = adapter::FlightPhase::Landing;
+    input.state = {};
+    for (int i = 0; i < 100; ++i) {
+        (void)backend.run_position(input, dt);
+    }
+    const auto ground_idle = backend.run_position(input, dt);
+    require(std::abs(ground_idle.thrust.body_z + 0.04) < 1.0e-9,
+        "Landed GROUND_IDLE must equal rotor thrust at MOT_SPIN_ARM");
+}
+
+void takeoff_slew_uses_ardupilot_scheduler_dt()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    altitude.hover_thrust = 0.5;
+    altitude.throttle_filter_hz = 0.0;
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    adapter::ApPositionShapingConfig shaping{false};
+    adapter::ApFlightPhaseConfig phase{};
+    phase.arming_delay_sec = 0.003;
+    phase.motor_spool_time_sec = 0.003;
+    phase.takeoff_slew_time_sec = 2.0;
+    phase.takeoff_slew_loop_rate_hz = 400.0;
+    adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping, phase);
+
+    adapter::PositionControl3DPositionInput input{};
+    input.flight_phase = adapter::FlightPhase::Takeoff;
+    input.target_position.z = -5.0;
+    constexpr double actual_dt = 0.003;
+    (void)backend.run_position(input, actual_dt); // ARMING_DELAY
+    (void)backend.run_position(input, actual_dt); // GROUND_IDLE reaches spin-min
+    const auto first = backend.run_position(input, actual_dt);
+    const auto second = backend.run_position(input, actual_dt);
+    require(std::abs(first.thrust.body_z + 0.0025) < 1.0e-12 &&
+            std::abs(second.thrust.body_z + 0.0050) < 1.0e-12,
+        "Takeoff slew must add G_Dt/TKOFF_SLEW_TIME, not elapsed simulation dt");
+}
+
 
 }  // namespace
 
@@ -372,6 +475,8 @@ int main()
     disabled_position_shaping_passes_target_directly();
     flight_phases_spool_land_and_reset();
     landing_descent_velocity_obeys_acceleration_and_jerk_limits();
+    ground_motor_duty_uses_rotor_model_without_changing_flight_thrust();
+    takeoff_slew_uses_ardupilot_scheduler_dt();
     std::cout << "ap_position_control_backends_smoke: PASS\n";
     return 0;
 }

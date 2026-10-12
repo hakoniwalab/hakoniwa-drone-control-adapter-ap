@@ -321,7 +321,13 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         argv = ["prepare", "--pro-root", str(self.base), str(self.source), str(self.output)]
         if prop_inch is not None:
             argv[1:1] = ["--prop-inch", str(prop_inch)]
-        model = {"thrust_hover": 0.42, "hover_duty": 0.5}
+        model = {
+            "thrust_hover": 0.42, "hover_duty": 0.5,
+            "spin_arm": 0.10, "spin_min": 0.15,
+            "motor_model_a_coef": 0.2, "motor_model_b_coef": 0.3,
+            "motor_nominal_voltage": 12.0, "motor_hover_omega": 400.0,
+            "spin_arm_thrust_hover": 0.04, "spin_min_thrust_hover": 0.09,
+        }
         with patch.dict(sys.modules, modules), patch.object(sys, "argv", argv), \
              patch.object(PREPARE.subprocess, "run", side_effect=fake_px4_prepare), \
              patch.object(PREPARE, "motor_thrust_model", return_value=model):
@@ -336,6 +342,14 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(drone["components"]["sensors"]["baro"]["delayMsec"], 60)
         self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 100)
         self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 60)
+        self.assertEqual(adapter["parameters"]["MOT_SPIN_ARM"], 0.10)
+        self.assertEqual(adapter["parameters"]["MOT_SPIN_MIN"], 0.15)
+        self.assertEqual(adapter["parameters"]["MOT_SPIN_MAX"], 0.95)
+        self.assertEqual(adapter["parameters"]["motor_model_a_coef"], 0.2)
+        self.assertEqual(adapter["parameters"]["motor_model_b_coef"], 0.3)
+        self.assertEqual(adapter["parameters"]["motor_nominal_voltage"], 12.0)
+        self.assertEqual(adapter["parameters"]["motor_hover_omega"], 400.0)
+        self.assertEqual(adapter["parameters"]["takeoff_slew_loop_rate_hz"], 400.0)
         self.assertAlmostEqual(drone["simulation"]["location"]["magneticField"]["declination_deg"], 15.15504, places=5)
         self.assertEqual(drone["components"]["sensors"]["gyro"]["drift"]["mode"], "ardupilot-sitl")
         self.assertEqual(drone["components"]["sensors"]["mag"]["noise"], 0)

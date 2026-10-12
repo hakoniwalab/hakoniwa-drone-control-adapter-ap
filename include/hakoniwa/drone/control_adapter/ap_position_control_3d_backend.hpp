@@ -31,10 +31,26 @@ struct ApFlightPhaseConfig {
     double arming_delay_sec{2.0};           // ARMING_DELAY_SEC adapter constant (not an AP_Param)
     double motor_spool_time_sec{0.5};       // MOT_SPOOL_TIME
     double takeoff_slew_time_sec{2.0};      // TKOFF_SLEW_TIME
+    // ArduCopter increments takeoff throttle with its cached G_Dt, which can
+    // differ from the elapsed simulation time between controller calls.
+    // Zero preserves the adapter's historical use of the caller's dt.
+    double takeoff_slew_loop_rate_hz{0.0};  // adapter representation of G_Dt
     double takeoff_throttle_max{0.9};       // TKOFF_THR_MAX
     double land_speed_mps{0.5};             // LAND_SPEED
     double land_speed_high_mps{0.0};        // LAND_SPEED_HIGH; 0 uses WPNAV_SPEED_DN
     double land_alt_low_m{10.0};             // LAND_ALT_LOW
+    // Adapter-only rotor-model values.  When enabled, ground motor Duty is
+    // converted back to the public T/T_hover command.  An absent model keeps
+    // the historical zero-thrust behavior.
+    bool ground_motor_output{false};
+    double motor_spin_arm{0.10};              // MOT_SPIN_ARM
+    double motor_spin_min{0.15};              // MOT_SPIN_MIN
+    double motor_spin_max{0.95};              // MOT_SPIN_MAX
+    double motor_thrust_expo{0.65};            // MOT_THST_EXPO
+    double motor_model_a_coef{0.0};           // Cq*R/K
+    double motor_model_b_coef{0.0};           // K+D*R/K
+    double motor_nominal_voltage{0.0};
+    double motor_hover_omega{0.0};
 };
 
 /**
@@ -72,6 +88,8 @@ private:
     PositionControl3DOutput run_takeoff(const PositionControl3DPositionInput& input, double dt_sec);
     PositionControl3DOutput run_landing(const PositionControl3DPositionInput& input, double dt_sec);
     void enter_phase(FlightPhase phase, const PositionControl3DPositionInput& input);
+    double normalized_thrust_at_duty(double duty) const;
+    double takeoff_throttle_to_normalized_thrust(double throttle) const;
 
     ApAltitudeControlBackend altitude_;
     ApHorizontalPositionControlBackend horizontal_;
@@ -86,6 +104,9 @@ private:
     double hold_x_ned_{0.0}, hold_y_ned_{0.0};
     double landed_candidate_sec_{0.0};
     bool landed_maybe_{false}, landed_{false};
+    bool takeoff_land_complete_{true};
+    bool takeoff_controller_initialized_{false};
+    double takeoff_slew_throttle_{0.0};
     double landing_vel_up_mps_{0.0}, landing_accel_up_mps2_{0.0};
     std::shared_ptr<const ApMotorThrottleLimits> motor_limits_{};
     bool shaping_started_{false};

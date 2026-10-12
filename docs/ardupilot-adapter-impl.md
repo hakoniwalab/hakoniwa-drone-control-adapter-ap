@@ -20,9 +20,18 @@ EKF3 observes the default disarmed state even after takeoff indication, which
 can keep armed-only EKF behavior disabled. Integration must explicitly forward
 the vehicle arming state.
 
-The allocation output omits PWM conversion, thrust expo, spool state, battery
-compensation, and lost-motor boost. The plant/caller converts normalized rotor
-thrust to its actuator command.
+The allocation output omits PWM conversion, thrust expo, battery compensation,
+and lost-motor boost. The plant/caller converts normalized rotor thrust to its
+actuator command. The position facade reproduces the takeoff and landed
+ground-output portions of spool state separately: configured actuator Duty is
+converted through the vehicle rotor model back to normalized rotor thrust
+and the allocator ignores attitude/rate torque through the configured
+`MOT_SPIN_MIN`-equivalent ceiling, matching `SHUT_DOWN`/`GROUND_IDLE`.
+before allocation. Ordinary flight allocation remains unchanged.
+The generated takeoff profile also uses the reference SITL's cached 2.5 ms
+`G_Dt` for each `TKOFF_SLEW_TIME` increment even though controller calls are
+about 3 ms apart; this is configured by `takeoff_slew_loop_rate_hz` and is off
+for configurations that omit the key.
 
 Full `AC_PosControl` is not instantiated because its constructor requires the
 vehicle AHRS, inertial navigation, motors, attitude controller, scheduler, and

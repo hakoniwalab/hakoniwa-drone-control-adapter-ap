@@ -202,6 +202,34 @@ void verifies_desaturation_range_over_command_grid()
     }
 }
 
+void verifies_shutdown_ignores_residual_torque()
+{
+    adapter::ApControlAllocationBackendConfig config{};
+    config.ground_idle_thrust_max = 0.09;
+    adapter::ApControlAllocationBackend backend(config);
+    auto input = make_quadx(0.0);
+    input.command.torque_x = 0.4;
+    input.command.torque_y = -0.3;
+    input.command.torque_z = 0.2;
+    const auto output = backend.run(input);
+    require(output.actuator_commands.count == 4, "Shutdown output count mismatch");
+    for (std::size_t i = 0; i < output.actuator_commands.count; ++i) {
+        require(near(output.actuator_commands.values[i], 0.0),
+            "SHUT_DOWN must command every motor to zero despite residual torque");
+    }
+    require(near(output.status.unallocated_torque_x, 0.4)
+            && near(output.status.unallocated_torque_y, -0.3)
+            && near(output.status.unallocated_torque_z, 0.2),
+        "Shutdown must report ignored torque as unallocated");
+
+    input.command.thrust.body_z = -0.06;
+    const auto spool = backend.run(input);
+    for (std::size_t i = 0; i < spool.actuator_commands.count; ++i) {
+        require(near(spool.actuator_commands.values[i], 0.06),
+            "GROUND_IDLE must preserve equal spool thrust despite residual torque");
+    }
+}
+
 }  // namespace
 
 int main()
@@ -212,6 +240,7 @@ int main()
     verifies_run_input_limits_trim_and_linearization();
     verifies_ardupilot_463_contract_guards();
     verifies_desaturation_range_over_command_grid();
+    verifies_shutdown_ignores_residual_torque();
     std::cout << "ap_control_allocation_backend_smoke: PASS\n";
     return EXIT_SUCCESS;
 }

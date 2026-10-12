@@ -59,9 +59,55 @@ ApPositionControl3DBackend::ApPositionControl3DBackend(
         }
     }
     if (flight_phase.takeoff_slew_time_sec <= 0.0 || flight_phase.takeoff_throttle_max <= 0.0 ||
-        flight_phase.land_speed_mps <= 0.0 || flight_phase.land_alt_low_m <= 0.0) {
+        flight_phase.land_speed_mps <= 0.0 || flight_phase.land_alt_low_m <= 0.0 ||
+        !std::isfinite(flight_phase.takeoff_slew_loop_rate_hz) ||
+        flight_phase.takeoff_slew_loop_rate_hz < 0.0) {
         throw std::invalid_argument("ArduPilot flight phase time, throttle, speed and altitude must be positive");
     }
+    if (flight_phase.ground_motor_output &&
+        (!(flight_phase.motor_spin_arm >= 0.0) ||
+         !(flight_phase.motor_spin_min > flight_phase.motor_spin_arm) ||
+         !(flight_phase.motor_spin_max > flight_phase.motor_spin_min) ||
+         !(flight_phase.motor_spin_max <= 1.0) ||
+         !(flight_phase.motor_thrust_expo >= -1.0 && flight_phase.motor_thrust_expo <= 1.0) ||
+         !(flight_phase.motor_model_a_coef >= 0.0) ||
+         !(flight_phase.motor_model_b_coef > 0.0) ||
+         !(flight_phase.motor_nominal_voltage > 0.0) ||
+         !(flight_phase.motor_hover_omega > 0.0))) {
+        throw std::invalid_argument("ArduPilot ground motor rotor-model values are invalid");
+    }
+}
+
+double ApPositionControl3DBackend::takeoff_throttle_to_normalized_thrust(double throttle) const
+{
+    if (!flight_phase_config_.ground_motor_output) {
+        return throttle / std::max(1.0e-9, hover_thrust_);
+    }
+    const double thrust = std::clamp(throttle, 0.0, 1.0);
+    const double expo = flight_phase_config_.motor_thrust_expo;
+    const double curve = std::abs(expo) < 1.0e-9
+        ? thrust
+        : ((expo - 1.0) + std::sqrt((1.0 - expo) * (1.0 - expo) + 4.0 * expo * thrust)) /
+            (2.0 * expo);
+    const double duty = flight_phase_config_.motor_spin_min +
+        (flight_phase_config_.motor_spin_max - flight_phase_config_.motor_spin_min) *
+            std::clamp(curve, 0.0, 1.0);
+    return normalized_thrust_at_duty(duty);
+}
+
+double ApPositionControl3DBackend::normalized_thrust_at_duty(double duty) const
+{
+    if (!flight_phase_config_.ground_motor_output || duty <= 0.0) {
+        return 0.0;
+    }
+    const double a = flight_phase_config_.motor_model_a_coef;
+    const double b = flight_phase_config_.motor_model_b_coef;
+    const double voltage = flight_phase_config_.motor_nominal_voltage;
+    const double omega = a > 0.0
+        ? (-b + std::sqrt(b * b + 4.0 * a * voltage * duty)) / (2.0 * a)
+        : voltage * duty / b;
+    const double hover_omega = flight_phase_config_.motor_hover_omega;
+    return (omega * omega) / (hover_omega * hover_omega);
 }
 
 void ApPositionControl3DBackend::reset()
@@ -75,6 +121,9 @@ void ApPositionControl3DBackend::reset()
     phase_time_sec_ = 0.0;
     landed_candidate_sec_ = 0.0;
     landed_maybe_ = landed_ = false;
+    takeoff_land_complete_ = true;
+    takeoff_controller_initialized_ = false;
+    takeoff_slew_throttle_ = 0.0;
     landing_vel_up_mps_ = landing_accel_up_mps2_ = 0.0;
 }
 
@@ -85,6 +134,9 @@ void ApPositionControl3DBackend::enter_phase(FlightPhase phase, const PositionCo
     phase_time_sec_ = 0.0;
     landed_candidate_sec_ = 0.0;
     landed_maybe_ = landed_ = false;
+    takeoff_land_complete_ = true;
+    takeoff_controller_initialized_ = false;
+    takeoff_slew_throttle_ = 0.0;
     landing_vel_up_mps_ = -input.state.velocity.z;
     landing_accel_up_mps2_ = 0.0;
     hold_x_ned_ = input.state.position.x;
@@ -100,6 +152,16 @@ void ApPositionControl3DBackend::enter_phase(FlightPhase phase, const PositionCo
 PositionControl3DOutput ApPositionControl3DBackend::run_takeoff(
     const PositionControl3DPositionInput& input, double dt_sec)
 {
+    const auto ground_output = [&](double throttle) {
+        PositionControl3DOutput output{};
+        // _AutoTakeoff::run resets the yaw target during spool-up and commands a
+        // zero heading rate while land_complete remains set.
+        output.target_attitude = from_euler(0.0, 0.0, input.state.yaw_rad);
+        output.thrust.body_z = -throttle / std::max(1.0e-9, hover_thrust_);
+        output.target_yaw_rate_rad_sec = 0.0;
+        return output;
+    };
+
     phase_time_sec_ += dt_sec;
     if (phase_time_sec_ <= flight_phase_config_.arming_delay_sec) {
         // ArduCopter keeps the motor interlock off for ARMING_DELAY_SEC after arming.  The common
@@ -108,59 +170,74 @@ PositionControl3DOutput ApPositionControl3DBackend::run_takeoff(
         // after arm), but intentionally differs if Takeoff is requested long after arming.
         altitude_.reset();
         horizontal_.reset();
-        PositionControl3DOutput output{};
-        output.target_attitude = from_euler(0.0, 0.0, input.target_yaw_rad.value_or(input.state.yaw_rad));
-        output.thrust.body_z = 0.0;
-        output.target_yaw_rate_rad_sec = input.target_yaw_rate_rad_sec;
-        return output;
+        return ground_output(0.0);
     }
 
     const double takeoff_elapsed = phase_time_sec_ - flight_phase_config_.arming_delay_sec;
     if (takeoff_elapsed <= flight_phase_config_.motor_spool_time_sec) {
         // ArduCopter takeoff.cpp waits for THROTTLE_UNLIMITED while relaxing its position
         // controllers.  The adapter has no spool-state output, so this interval is represented by
-        // zero collective thrust and a level attitude.  Interlock and motor spool feedback are not
-        // part of the common contract.
+        // a Duty ramp from zero to MOT_SPIN_MIN and a level attitude.  Convert
+        // each Duty through the vehicle rotor model because the public output
+        // is T/T_hover, not an ESC actuator value.  Interlock and motor spool
+        // feedback are not part of the common contract.
         altitude_.reset();
         horizontal_.reset();
-        PositionControl3DOutput output{};
-        output.target_attitude = from_euler(0.0, 0.0, input.target_yaw_rad.value_or(input.state.yaw_rad));
-        output.thrust.body_z = 0.0;
-        output.target_yaw_rate_rad_sec = input.target_yaw_rate_rad_sec;
-        return output;
+        const double ratio = std::clamp(
+            takeoff_elapsed / flight_phase_config_.motor_spool_time_sec, 0.0, 1.0);
+        const double duty = ratio * flight_phase_config_.motor_spin_min;
+        return ground_output(normalized_thrust_at_duty(duty) * hover_thrust_);
     }
 
-    // ArduCopter takeoff.cpp raises throttle over TKOFF_SLEW_TIME and limits it to
-    // TKOFF_THR_MAX.  This is an independently written output cap in throttle units.
-    const double slew_elapsed = takeoff_elapsed - flight_phase_config_.motor_spool_time_sec;
-    const double throttle_cap = flight_phase_config_.takeoff_throttle_max *
-        std::clamp(slew_elapsed / flight_phase_config_.takeoff_slew_time_sec, 0.0, 1.0);
-    // Do not advance the open-loop jerk-limited position trajectory while the
-    // slew cap is still below hover thrust.  The vehicle cannot follow an
-    // upward trajectory in that interval, so advancing it here leaves the
-    // desired position/velocity far ahead of the vehicle.  Once the cap opens,
-    // the position loop then asks for the cap on every cycle and the vehicle
-    // accelerates to WPNAV_SPEED_UP instead of following the shaped takeoff.
-    // ArduCopter likewise starts its takeoff trajectory only after the motors
-    // have reached the flight-capable spool state.
-    if (throttle_cap < hover_thrust_) {
+    // ArduCopter takeoff.cpp increments throttle by dt/TKOFF_SLEW_TIME and
+    // constrains the result to 0..1.  TKOFF_THR_MAX is only the landed-state
+    // exit threshold; it does not scale the slew rate.  These are normalized
+    // thrust units before MOT_THST_EXPO and the MOT_SPIN_MIN/MAX actuator map.
+    const double slew_dt = flight_phase_config_.takeoff_slew_loop_rate_hz > 0.0
+        ? 1.0 / flight_phase_config_.takeoff_slew_loop_rate_hz
+        : dt_sec;
+    takeoff_slew_throttle_ = std::clamp(
+        takeoff_slew_throttle_ + slew_dt / flight_phase_config_.takeoff_slew_time_sec,
+        0.0, 1.0);
+    const double throttle_cap = takeoff_slew_throttle_;
+    // _AutoTakeoff::run keeps land_complete set after spool-up, slews throttle,
+    // and calls init_z_controller every cycle.  It does not begin
+    // input_pos_vel_accel_z until motion is detected or the slew reaches 90%
+    // (bounded by TKOFF_THR_MAX).  Starting at hover thrust instead makes the
+    // desired path run ahead of a vehicle that has not actually left ground.
+    if (takeoff_land_complete_) {
         altitude_.reset();
         horizontal_.reset();
-        PositionControl3DOutput output{};
-        output.target_attitude = from_euler(0.0, 0.0, input.target_yaw_rad.value_or(input.state.yaw_rad));
-        output.thrust.body_z = -throttle_cap / std::max(1.0e-9, hover_thrust_);
-        output.target_yaw_rate_rad_sec = input.target_yaw_rate_rad_sec;
-        return output;
+        const bool throttle_reached = throttle_cap >= std::min(flight_phase_config_.takeoff_throttle_max, 0.9);
+        const bool acceleration_detected = -input.state.acceleration.z >= 0.5 * shaping_.acceleration_z_mps2;
+        const bool velocity_detected = -input.state.velocity.z >= 0.1 * altitude_.speed_up_mps();
+        if (throttle_reached || acceleration_detected || velocity_detected) {
+            takeoff_land_complete_ = false;
+        }
+        // ArduCopter returns on the cycle that clears land_complete; position
+        // shaping starts on the following controller cycle.
+        return ground_output(
+            takeoff_throttle_to_normalized_thrust(throttle_cap) * hover_thrust_);
     }
 
-    // Only start/advance the shaped path after the slew can sustain hover.  Calling
-    // run_position before the test above silently advanced the path while the vehicle
-    // was pinned to the ground; at liftoff it was already several metres ahead and the
-    // closed loop saturated at WPNAV_SPEED_UP.
+    // Start the path from the measured position, velocity and acceleration on
+    // the first cycle after the ArduCopter-equivalent liftoff decision.  Seed
+    // the acceleration PID with the preceding open-loop throttle, as
+    // AC_PosControl::init_z_controller does, to keep output continuous.
+    if (!takeoff_controller_initialized_) {
+        AltitudeControlInput altitude{};
+        altitude.attitude = input.state.attitude;
+        altitude.position.z = -input.state.position.z;
+        altitude.velocity.vz = -input.state.velocity.z;
+        altitude.acceleration.az = -input.state.acceleration.z;
+        altitude_.initialize_from_throttle(
+            altitude, takeoff_throttle_to_normalized_thrust(throttle_cap) * hover_thrust_);
+        takeoff_controller_initialized_ = true;
+    }
     phase_dispatch_bypass_ = true;
     auto output = run_position(input, dt_sec);
     phase_dispatch_bypass_ = false;
-    const double normalized_cap = throttle_cap / std::max(1.0e-9, hover_thrust_);
+    const double normalized_cap = takeoff_throttle_to_normalized_thrust(throttle_cap);
     output.thrust.body_z = std::max(output.thrust.body_z, -normalized_cap);
     return output;
 }
@@ -175,7 +252,10 @@ PositionControl3DOutput ApPositionControl3DBackend::run_landing(
     if (landed_) {
         PositionControl3DOutput output{};
         output.target_attitude = from_euler(0.0, 0.0, input.target_yaw_rad.value_or(input.state.yaw_rad));
-        output.thrust.body_z = 0.0;
+        // ArduCopter returns to GROUND_IDLE after touchdown.  Its actuator
+        // settles at MOT_SPIN_ARM; expose the equivalent rotor thrust.
+        output.thrust.body_z = -normalized_thrust_at_duty(
+            flight_phase_config_.motor_spin_arm);
         output.target_yaw_rate_rad_sec = input.target_yaw_rate_rad_sec;
         return output;
     }
@@ -231,7 +311,8 @@ PositionControl3DOutput ApPositionControl3DBackend::run_landing(
         std::clog << "AP adapter landed phase_time_sec=" << phase_time_sec_ << '\n';
         altitude_.reset();
         horizontal_.reset();
-        output.thrust.body_z = 0.0;
+        output.thrust.body_z = -normalized_thrust_at_duty(
+            flight_phase_config_.motor_spin_arm);
     }
     return output;
 }
@@ -245,8 +326,9 @@ void ApPositionControl3DBackend::shape_position_target(
     if (!shaping_started_) {
         pos_ne_[0] = state.position.x; pos_ne_[1] = state.position.y;
         vel_ne_[0] = state.velocity.x; vel_ne_[1] = state.velocity.y;
-        accel_ne_[0] = accel_ne_[1] = 0.0;
-        pos_up_ = -state.position.z; vel_up_ = -state.velocity.z; accel_up_ = 0.0;
+        accel_ne_[0] = state.acceleration.x; accel_ne_[1] = state.acceleration.y;
+        pos_up_ = -state.position.z; vel_up_ = -state.velocity.z;
+        accel_up_ = -state.acceleration.z;
         shaping_started_ = true;
     }
     const float dt = static_cast<float>(dt_sec);

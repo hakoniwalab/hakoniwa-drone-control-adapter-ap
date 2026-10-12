@@ -42,10 +42,23 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     c.flight_phase.arming_delay_sec=optional_number(s,"ARMING_DELAY_SEC",2.0);
     c.flight_phase.motor_spool_time_sec=optional_number(s,"MOT_SPOOL_TIME",0.5);
     c.flight_phase.takeoff_slew_time_sec=optional_number(s,"TKOFF_SLEW_TIME",2.0);
+    c.flight_phase.takeoff_slew_loop_rate_hz=optional_number(s,"takeoff_slew_loop_rate_hz",0.0);
     c.flight_phase.takeoff_throttle_max=optional_number(s,"TKOFF_THR_MAX",0.9);
     c.flight_phase.land_speed_mps=optional_number(s,"LAND_SPEED",0.5);
     c.flight_phase.land_speed_high_mps=optional_number(s,"LAND_SPEED_HIGH",0.0);
     c.flight_phase.land_alt_low_m=optional_number(s,"LAND_ALT_LOW",10.0);
+    c.flight_phase.motor_spin_arm=optional_number(s,"MOT_SPIN_ARM",0.10);
+    c.flight_phase.motor_spin_min=optional_number(s,"MOT_SPIN_MIN",0.15);
+    c.flight_phase.motor_spin_max=optional_number(s,"MOT_SPIN_MAX",0.95);
+    c.flight_phase.motor_thrust_expo=optional_number(s,"MOT_THST_EXPO",0.65);
+    c.flight_phase.motor_model_a_coef=optional_number(s,"motor_model_a_coef",0.0);
+    c.flight_phase.motor_model_b_coef=optional_number(s,"motor_model_b_coef",0.0);
+    c.flight_phase.motor_nominal_voltage=optional_number(s,"motor_nominal_voltage",0.0);
+    c.flight_phase.motor_hover_omega=optional_number(s,"motor_hover_omega",0.0);
+    c.flight_phase.ground_motor_output=
+        c.flight_phase.motor_model_b_coef>0.0 && c.flight_phase.motor_nominal_voltage>0.0 &&
+        c.flight_phase.motor_hover_omega>0.0;
+    c.control_allocation.ground_idle_thrust_max=optional_number(s,"spin_min_thrust_hover",0.0);
     c.ekf.gps_delay_ms=optional_number(s,"GPS1_DELAY_MS",0.0); c.ekf.hgt_delay_ms=optional_number(s,"EK3_HGT_DELAY",60.0);
     c.ekf.debug_csv=optional_string(s,"ekf_debug_csv");
     if(!std::isfinite(c.ekf.gps_delay_ms)||c.ekf.gps_delay_ms<0||c.ekf.gps_delay_ms>250)throw std::invalid_argument("GPS1_DELAY_MS must be 0..250 (NavEKF3 limit)");

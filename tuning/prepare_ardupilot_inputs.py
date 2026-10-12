@@ -236,6 +236,21 @@ def main() -> int:
     controller_params = parse_param_text(output / "controller-params.txt")
     model = motor_thrust_model(drone, controller_params, compute_hover_thrust_fraction)
     config["parameters"]["MOT_THST_HOVER"] = model["thrust_hover"]
+    config["parameters"].update({
+        "MOT_SPIN_ARM": model["spin_arm"],
+        "MOT_SPIN_MIN": model["spin_min"],
+        "MOT_SPIN_MAX": model.get("spin_max", 0.95),
+        "MOT_THST_EXPO": model.get("expo", config["parameters"].get("MOT_THST_EXPO", 0.65)),
+        "motor_model_a_coef": model["motor_model_a_coef"],
+        "motor_model_b_coef": model["motor_model_b_coef"],
+        "motor_nominal_voltage": model["motor_nominal_voltage"],
+        "motor_hover_omega": model["motor_hover_omega"],
+        "spin_min_thrust_hover": model["spin_min_thrust_hover"],
+        # ArduCopter's takeoff slew adds G_Dt/TKOFF_SLEW_TIME.  In this SITL
+        # build G_Dt is cached from the initial 400 Hz loop period, while
+        # Hakoniwa advances the controller about once per 3 ms physics step.
+        "takeoff_slew_loop_rate_hz": 400.0,
+    })
     config["parameters"]["GPS1_DELAY_MS"] = delays["gps"]
     config["parameters"]["EK3_HGT_DELAY"] = delays["baro"]
     changes.append(f"EKF allowance: GPS1_DELAY_MS {delays['gps']:g}, EK3_HGT_DELAY {delays['baro']:g} (the sensor delays)")
@@ -243,6 +258,11 @@ def main() -> int:
     changes.append(f"initial parameters: {INITIAL_PARAMETER_SOURCE}, propeller {prop_inch} inch")
     changes.append("parameters: " + ", ".join(f"{k} {v:g}" for k, v in initial.items()))
     changes.append(f"MOT_THST_HOVER {model['thrust_hover']:.4f} from the rotor model (hover duty {model['hover_duty']:.3f})")
+    changes.append(
+        "ground motor output: Duty MOT_SPIN_ARM/MIN "
+        f"{model['spin_arm']:.3f}/{model['spin_min']:.3f} -> T/T_hover "
+        f"{model['spin_arm_thrust_hover']:.4f}/{model['spin_min_thrust_hover']:.4f}"
+    )
     (output / "ardupilot-controller-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
     print(f"Prepared ArduPilot tuning inputs: {output}")

@@ -61,6 +61,10 @@ void validate_config(const ApControlAllocationBackendConfig& config)
         || config.yaw_headroom > 1.0) {
         throw std::invalid_argument("ArduPilot allocator yaw_headroom must be in [0,1]");
     }
+    if (!std::isfinite(config.ground_idle_thrust_max)
+        || config.ground_idle_thrust_max < 0.0) {
+        throw std::invalid_argument("ArduPilot allocator ground idle thrust must be non-negative");
+    }
 }
 
 void validate_actuator_contract(const RotorActuatorConfig& actuator)
@@ -193,6 +197,30 @@ ControlAllocationOutput ApControlAllocationBackend::run(
         || !std::isfinite(input.command.torque_y)
         || !std::isfinite(input.command.torque_z)) {
         throw std::invalid_argument("ArduPilot allocator requires a finite control command");
+    }
+    // AP_Motors SHUT_DOWN/GROUND_IDLE ignores attitude/rate torque. Generated
+    // configs provide the MOT_SPIN_MIN-equivalent ceiling in T/T_hover, so the
+    // allocator can preserve the position stage's equal Duty ramp instead of
+    // turning residual attitude torque into unequal ground motor commands.
+    bool unbiased_actuators = true;
+    for (std::size_t i = 0; i < input.actuator_count; ++i) {
+        unbiased_actuators = unbiased_actuators
+            && input.actuators[i].trim == 0.0
+            && input.actuators[i].linearization_point == 0.0;
+    }
+    const double ground_collective = -input.command.thrust.body_z;
+    if (config_.ground_idle_thrust_max > 0.0 && unbiased_actuators
+        && ground_collective >= 0.0
+        && ground_collective <= config_.ground_idle_thrust_max + kEpsilon) {
+        ControlAllocationOutput output = make_empty_output(input);
+        output.actuator_commands.count = input.actuator_count;
+        for (std::size_t i = 0; i < input.actuator_count; ++i) {
+            output.actuator_commands.values[i] = ground_collective;
+        }
+        output.status.unallocated_torque_x = input.command.torque_x;
+        output.status.unallocated_torque_y = input.command.torque_y;
+        output.status.unallocated_torque_z = input.command.torque_z;
+        return output;
     }
     const AllocationModel model = build_model(input);
     if (model.count == 0) {

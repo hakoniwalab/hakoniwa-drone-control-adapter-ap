@@ -36,8 +36,32 @@ matches the supported mission and Commander sequence, which requests takeoff
 immediately after arming; a takeoff requested after the vehicle has already
 been armed for some time consequently differs from ArduCopter.
 
+Generated configurations set the adapter-only `takeoff_slew_loop_rate_hz` to
+400 Hz. ArduCopter adds `G_Dt / TKOFF_SLEW_TIME` on each takeoff iteration;
+in the reference SITL run `G_Dt` remains 2.5 ms while controller outputs arrive
+about every 3 ms. Consequently the observed throttle rises at about 0.417/s,
+not 0.5/s in simulation wall time. If the key is absent or zero, the adapter
+uses the caller's `dt_sec`, preserving the previous behavior.
+
+Prepared tuning configurations also contain `MOT_SPIN_ARM`, `MOT_SPIN_MIN`
+and the adapter-only rotor values `motor_model_a_coef`,
+`motor_model_b_coef`, `motor_nominal_voltage`, and `motor_hover_omega`.
+During `ARMING_DELAY_SEC` the output is `SHUT_DOWN` (Duty 0). During the next
+`MOT_SPOOL_TIME` it follows ArduPilot's `GROUND_IDLE` ramp from Duty 0 to
+`MOT_SPIN_MIN`. After touchdown it settles at `MOT_SPIN_ARM`. Each Duty is
+passed through the vehicle's electrical rotor model and divided by hover
+thrust before it crosses the public `T/T_hover` boundary. If the rotor values
+are absent, this ground-output extension is off and the historical zero output
+and allocation behavior are retained. Through the generated
+`spin_min_thrust_hover` ceiling, ground allocation ignores residual body-torque
+requests so all motors follow the same shutdown/spool command.
+is retained. Normal flight commands are not passed through this conversion.
+
 The implementation is independent code based on the state descriptions in
 ArduCopter `takeoff.cpp:141-203` (spool and throttle slew),
+`AP_MotorsMulticopter.cpp:509-720` (spool state),
+`AP_MotorsMatrix.cpp:143-175` (state-dependent actuator output),
+`AP_Motors_Thrust_Linearization.cpp:100-129` (thrust-to-actuator curve),
 `mode.cpp:640-664` (`land_run_vertical_control`), and
 `land_detector.cpp:35-149` (0.2 s maybe / 1.0 s
 complete timing). The common contract does not carry rangefinder, weight-on-
