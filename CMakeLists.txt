@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16)
 
 project(hakoniwa_drone_control_adapter_ap LANGUAGES CXX)
 
+# ArduPilot's plugin always implements the flight-phase contract.  The public
+# headers, static library, plugin and tests must use the same ABI revision.
+add_compile_definitions(HAKO_ENABLE_FLIGHT_PHASE)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()

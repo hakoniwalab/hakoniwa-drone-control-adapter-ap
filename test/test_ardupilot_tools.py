@@ -70,6 +70,12 @@ class ExportArduPilotParamsTest(unittest.TestCase):
             "ATC_SLEW_YAW": 6000,
             "GPS1_DELAY_MS": 0.4,
             "EK3_HGT_DELAY": 60,
+            "MOT_SPOOL_TIME": 0.5,
+            "TKOFF_SLEW_TIME": 2.0,
+            "TKOFF_THR_MAX": 0.9,
+            "LAND_SPEED": 0.5,
+            "LAND_SPEED_HIGH": 0.0,
+            "LAND_ALT_LOW": 10.0,
         }
         (self.runtime / "adapter.json").write_text(
             json.dumps({"parameters": adapter_params}), encoding="utf-8"
@@ -130,6 +136,8 @@ class ExportArduPilotParamsTest(unittest.TestCase):
             "INS_GYRO_FILTER": 42, "MOT_PWM_MIN": 1000, "MOT_PWM_MAX": 2000,
             "MOT_SPIN_MIN": 0.15, "MOT_SPIN_MAX": 0.95, "FRAME_CLASS": 2, "FRAME_TYPE": 1,
             "GPS1_DELAY_MS": 1, "EK3_HGT_DELAY": 60,
+            "MOT_SPOOL_TIME": 0.5, "TKOFF_SLEW_TIME": 2.0, "TKOFF_THR_MAX": 0.9,
+            "LAND_SPEED": 50, "LAND_SPEED_HIGH": 0, "LAND_ALT_LOW": 1000,
         }
         for key, value in expected.items():
             self.assertAlmostEqual(values[key], value)
@@ -196,7 +204,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.runtime.mkdir(parents=True)
         self.source.mkdir()
         tuned = {
-            "simulation": {"timeStep": 0.003},
+            "simulation": {"timeStep": 0.003, "location": {"latitude": 47.641468, "longitude": -122.140165}},
             "components": {
                 "droneDynamics": {"mujoco": {"modelPath": "drone.xml"}},
                 "sensors": {
@@ -234,7 +242,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertTrue((self.out / "params.parm").is_file())
         sitl_values = [line for line in (self.out / "sitl.parm").read_text().splitlines()
                        if line and not line.startswith("#")]
-        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "SIM_SPEEDUP,1", "LOG_BITMASK,180223", "SIM_GPS_HZ,7",
+        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "COMPASS_DEC,0.264505349", "SIM_SPEEDUP,1", "LOG_BITMASK,180223", "SIM_GPS_HZ,7",
                                        "INS_ACCEL_FILTER,30", "SIM_GPS_LAG_MS,100",
                                        "SIM_BARO_DELAY,60"])
         self.assertNotIn("LOG_BITMASK", (self.out / "params.parm").read_text())
@@ -281,7 +289,10 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
 
     def run_prepare(self, sensors: dict | None = None, prop_inch: int | None = None,
                     model_xml: str | None = None) -> tuple[dict, dict]:
-        source_config = {"components": {"sensors": sensors or {}}}
+        source_config = {
+            "simulation": {"location": {"latitude": 47.641468, "longitude": -122.140165}},
+            "components": {"sensors": sensors or {}},
+        }
         (self.source / "drone_config_0.json").write_text(json.dumps(source_config))
         (self.source / "controller-params.txt").write_text("")
         (self.source / "drone.xml").write_text(model_xml or (
@@ -318,6 +329,8 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(drone["components"]["sensors"]["baro"]["delayMsec"], 60)
         self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 100)
         self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 60)
+        self.assertAlmostEqual(drone["simulation"]["location"]["magneticField"]["declination_deg"], 15.15504, places=5)
+        self.assertEqual(drone["components"]["sensors"]["gyro"]["drift"]["mode"], "ardupilot-sitl")
 
     def test_preserves_existing_sensor_delays(self) -> None:
         drone, adapter = self.run_prepare({"gps": {"delayMsec": 25}, "baro": {"delayMsec": 60}})

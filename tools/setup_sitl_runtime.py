@@ -42,10 +42,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ardupilot_declination import magnetic_field
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = ROOT / "tuning" / "export_ardupilot_params.py"
@@ -145,6 +149,8 @@ def main() -> int:
 
     # 2. SITL-only parameters
     tuned = load_json(runtime / "drone_config" / "drone_config_0.json")
+    location = tuned["simulation"]["location"]
+    field = magnetic_field(float(location["latitude"]), float(location["longitude"]))
     sim_step_sec = float(tuned["simulation"]["timeStep"])
     tuned_accel_filter_hz = read_parm(params, "INS_ACCEL_FILTER")
     if tuned_accel_filter_hz is None:
@@ -152,6 +158,9 @@ def main() -> int:
     (out / "sitl.parm").write_text(
         "# SITL only: not part of the tuning result\n"
         "ARMING_CHECK,0\n"          # no accel calibration in SITL; main loop at the sensor period (< 400 Hz)
+        # A real vehicle retains the previous flight's auto-declination.  Seed SITL likewise so EKF
+        # yaw is not initialised with zero before GPS provides the home location.
+        f"COMPASS_DEC,{math.radians(field['declination_deg']):.9g}\n"
         # SIM_SPEEDUP must be set for the AirSim backend: AP_Logger_File scales its IO timeout by it
         # (AP_Logger_File.cpp, timeout_ms *= sitl->speedup) and an unset value trapped the float
         # conversion, which aborted SITL with file logging on.

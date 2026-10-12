@@ -33,6 +33,14 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     c.position_shaping.acceleration_z_mps2=optional_number(s,"WPNAV_ACCEL_Z",2.5);
     c.position_shaping.jerk_xy_mps3=optional_number(s,"PSC_JERK_XY",5.0); c.position_shaping.jerk_z_mps3=optional_number(s,"PSC_JERK_Z",5.0);
     if(!(c.position_shaping.acceleration_xy_mps2>=0)||!(c.position_shaping.acceleration_z_mps2>0)||!(c.position_shaping.jerk_xy_mps3>0)||!(c.position_shaping.jerk_z_mps3>0))throw std::invalid_argument("WPNAV_ACCEL must be >= 0; WPNAV_ACCEL_Z, PSC_JERK_XY and PSC_JERK_Z must be positive");
+    c.flight_phase.takeoff_profile=optional_number(s,"takeoff_profile",1.0)!=0.0;
+    c.flight_phase.landing_profile=optional_number(s,"landing_profile",1.0)!=0.0;
+    c.flight_phase.motor_spool_time_sec=optional_number(s,"MOT_SPOOL_TIME",0.5);
+    c.flight_phase.takeoff_slew_time_sec=optional_number(s,"TKOFF_SLEW_TIME",2.0);
+    c.flight_phase.takeoff_throttle_max=optional_number(s,"TKOFF_THR_MAX",0.9);
+    c.flight_phase.land_speed_mps=optional_number(s,"LAND_SPEED",0.5);
+    c.flight_phase.land_speed_high_mps=optional_number(s,"LAND_SPEED_HIGH",0.0);
+    c.flight_phase.land_alt_low_m=optional_number(s,"LAND_ALT_LOW",10.0);
     c.ekf.gps_delay_ms=optional_number(s,"GPS1_DELAY_MS",0.0); c.ekf.hgt_delay_ms=optional_number(s,"EK3_HGT_DELAY",60.0);
     if(!std::isfinite(c.ekf.gps_delay_ms)||c.ekf.gps_delay_ms<0||c.ekf.gps_delay_ms>250)throw std::invalid_argument("GPS1_DELAY_MS must be 0..250 (NavEKF3 limit)");
     // NavEKF3 inside the plugin runs with its default parameters; its height delay cannot be changed.

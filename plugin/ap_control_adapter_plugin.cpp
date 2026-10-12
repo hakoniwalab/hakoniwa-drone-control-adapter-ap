@@ -245,7 +245,7 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
                 return static_cast<adapter::IPositionControl3DBackend*>(backend);
             } else {
                 auto* backend = new adapter::ApPositionControl3DBackend(config.altitude_control, config.horizontal_control,
-                                                                      adapter::position_shaping_for(config));
+                                                                      adapter::position_shaping_for(config), config.flight_phase);
                 backend->set_motor_limits_source(motor_limits);
                 return static_cast<adapter::IPositionControl3DBackend*>(backend);
             }

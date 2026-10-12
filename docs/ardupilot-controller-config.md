@@ -17,6 +17,27 @@ converting throttle to collective thrust normalized by `MOT_THST_HOVER`.
 Runtime stage frequencies live in the `runtime` object. `dt_sec` supplied by
 the caller remains authoritative for every state update.
 
+## Takeoff and landing phases
+
+The AP plugin is always built with `HAKO_ENABLE_FLIGHT_PHASE`. `takeoff_profile`
+and `landing_profile` select the ArduCopter-style handling of the caller's
+`Takeoff` and `Landing` phases. The profile reads `MOT_SPOOL_TIME`,
+`TKOFF_SLEW_TIME`, `TKOFF_THR_MAX`, `LAND_SPEED`, `LAND_SPEED_HIGH`, and
+`LAND_ALT_LOW`; time, throttle fraction, speed, and altitude use seconds,
+0..1, m/s, and metres at the adapter boundary.
+
+The implementation is independent code based on the state descriptions in
+ArduCopter `takeoff.cpp:141-203` (spool and throttle slew),
+`mode.cpp:640-664` (`land_run_vertical_control`), and
+`land_detector.cpp:35-149` (0.2 s maybe / 1.0 s
+complete timing). The common contract does not carry rangefinder, weight-on-
+wheels, motor interlock, or attitude-error inputs, so those checks are not
+reproduced. Ground height comes from the local position relative to the
+takeoff point; contact uses height, vertical speed, acceleration, and the
+adapter's lower-thrust limit. A completed landing is written to stderr as
+`AP adapter landed phase_time_sec=...`; Commander retains its separate
+service-side truth `landed` decision.
+
 ## Thrust units
 
 The public allocator boundary uses normalized rotor thrust:

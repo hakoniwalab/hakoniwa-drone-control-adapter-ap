@@ -38,6 +38,7 @@ struct ArdupilotControllerConfig {
     // of 0 is derived when the stage is made: 0.5 g tan(lean angle limit), ArduCopter's WPNAV_ACCEL
     // as the exporter writes it.
     ApPositionShapingConfig position_shaping{true, 0.0, 5.0, 2.5, 5.0};
+    ApFlightPhaseConfig flight_phase{};
     ApAltitudeControlBackendConfig altitude_control{};
     ApHorizontalPositionControlBackendConfig horizontal_control{};
     ApAttitudeControlBackendConfig attitude_control{};

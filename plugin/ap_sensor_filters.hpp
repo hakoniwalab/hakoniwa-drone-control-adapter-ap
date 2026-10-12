@@ -133,7 +133,7 @@ private:
 class FilteredPositionControl3D final : public IPositionControl3DBackend {
 public:
     FilteredPositionControl3D(const ArdupilotControllerConfig& config)
-        : inner_(config.altitude_control, config.horizontal_control, position_shaping_for(config))
+        : inner_(config.altitude_control, config.horizontal_control, position_shaping_for(config), config.flight_phase)
     {
         for (auto* filter : {&ax_, &ay_, &az_}) {
             filter->configure(config.runtime.altitude_hz, config.sensor_filter.accel_cutoff_hz);

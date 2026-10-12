@@ -220,6 +220,79 @@ void disabled_position_shaping_passes_target_directly()
         "position_input_shaping 0 must hand the full target directly to the position P loop");
 }
 
+void flight_phases_spool_land_and_reset()
+{
+    adapter::ApAltitudeControlBackendConfig altitude{};
+    altitude.position_p = 1.0;
+    altitude.velocity_p = 0.2;
+    altitude.velocity_i = altitude.velocity_d = altitude.velocity_feed_forward = 0.0;
+    altitude.velocity_filter_hz = altitude.velocity_derivative_filter_hz = 0.0;
+    altitude.acceleration_p = 0.2;
+    altitude.acceleration_i = altitude.acceleration_d = altitude.acceleration_feed_forward = 0.0;
+    altitude.acceleration_target_filter_hz = altitude.acceleration_error_filter_hz = 0.0;
+    altitude.acceleration_derivative_filter_hz = 0.0;
+    altitude.hover_thrust = 0.5;
+    altitude.throttle_filter_hz = 0.0;
+    altitude.speed_up_mps = 6.0;
+    altitude.speed_down_mps = 6.0;
+    adapter::ApHorizontalPositionControlBackendConfig horizontal{};
+    horizontal.velocity_i = horizontal.velocity_d = 0.0;
+    horizontal.velocity_error_filter_hz = horizontal.velocity_derivative_filter_hz = 0.0;
+    adapter::ApPositionShapingConfig shaping{true, 2.5, 5.0, 2.5, 5.0};
+    adapter::ApFlightPhaseConfig phase{};
+    adapter::ApPositionControl3DBackend backend(altitude, horizontal, shaping, phase);
+
+    adapter::PositionControl3DPositionInput input{};
+    input.flight_phase = adapter::FlightPhase::Takeoff;
+    input.target_position.z = -5.0;
+    constexpr double dt = 0.01;
+    for (int i = 0; i < 50; ++i) {
+        require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
+            "Takeoff spool interval must command zero thrust");
+    }
+    adapter::PositionControl3DOutput early_slew{};
+    for (int i = 0; i < 10; ++i) {
+        early_slew = backend.run_position(input, dt);
+    }
+    require(early_slew.thrust.body_z <= 0.0 && early_slew.thrust.body_z > -0.11,
+        "Takeoff throttle must stay under the configured early slew cap");
+
+    // While the slew cap is below hover the target trajectory must remain at
+    // the ground.  Otherwise it runs ahead while the vehicle cannot climb and
+    // the controller asks for the cap continuously once lift becomes possible.
+    input.state.position.z = -0.25;
+    for (int i = 0; i < 60; ++i) {
+        (void)backend.run_position(input, dt);
+    }
+    const auto first_flying = backend.run_position(input, dt);
+    require(first_flying.thrust.body_z > -1.2,
+        "Takeoff trajectory must start near the vehicle when the slew reaches hover");
+
+    input.flight_phase = adapter::FlightPhase::Normal;
+    input.target_position = {};
+    const auto normal = backend.run_position(input, dt);
+    require(normal.thrust.body_z < -0.9,
+        "Normal phase must keep the pre-flight-phase position controller behavior");
+
+    auto limits = std::make_shared<adapter::ApMotorThrottleLimits>();
+    limits->lower = true;
+    backend.set_motor_limits_source(limits);
+    input.flight_phase = adapter::FlightPhase::Landing;
+    input.state.position.z = 0.0;
+    input.state.velocity = {};
+    input.state.acceleration = {};
+    for (int i = 0; i < 100; ++i) {
+        (void)backend.run_position(input, dt);
+    }
+    require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
+        "Landing detector must stop thrust after one second at the lower limit");
+
+    input.flight_phase = adapter::FlightPhase::Takeoff;
+    input.target_position.z = -5.0;
+    require(std::abs(backend.run_position(input, dt).thrust.body_z) < 1.0e-12,
+        "A new Takeoff phase must reset landed state and restart spool");
+}
+
 
 }  // namespace
 
@@ -231,6 +304,7 @@ int main()
     position_3d_uses_target_heading_for_tilt();
     position_shaping_respects_speed_acceleration_and_stops();
     disabled_position_shaping_passes_target_directly();
+    flight_phases_spool_land_and_reset();
     std::cout << "ap_position_control_backends_smoke: PASS\n";
     return 0;
 }

@@ -40,6 +40,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ardupilot_vehicle import motor_thrust_model  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools"))
+from ardupilot_declination import magnetic_field  # noqa: E402
 
 TEMPLATE = ROOT / "config" / "ardupilot-controller-config.json"
 PLUGIN = ROOT / "install" / "lib" / "libhakoniwa_drone_control_adapter_ap_plugin.so"
@@ -163,6 +165,24 @@ def main() -> int:
     controller["ekf"] = {"enable": True, **EKF_INTERVALS_USEC, "altitudeReference": "takeoff"}
     changes.append("controller: adapter-plugin (ArduPilot), EKF at the SITL sensor periods, altitude from the takeoff point")
     sensors = drone.setdefault("components", {}).setdefault("sensors", {})
+    location = drone["simulation"]["location"]
+    field = magnetic_field(float(location["latitude"]), float(location["longitude"]))
+    location["magneticField"] = {
+        "intensity_nT": field["intensity_gauss"] * 100000.0,
+        "declination_deg": field["declination_deg"],
+        "inclination_deg": field["inclination_deg"],
+    }
+    # AP SITL starts its triangular bias clock at autopilot startup; the prepared Control Link run
+    # starts Hakoniwa's clock at the same simulation epoch.
+    sensors.setdefault("gyro", {})["drift"] = {
+        "mode": "ardupilot-sitl", "speedDegPerSecPerMin": 0.05, "timeMin": 5.0
+    }
+    changes.append(
+        "magnetic field: AP_Declination table at home "
+        f"(declination {field['declination_deg']:.6f} deg, inclination {field['inclination_deg']:.6f} deg, "
+        f"intensity {field['intensity_gauss']:.6f} gauss)"
+    )
+    changes.append("gyro drift: ArduPilot SITL default 0.05 deg/s/min triangular over 5 min")
     delays: dict[str, float] = {}
     for name, default in DEFAULT_SENSOR_DELAY_MSEC.items():
         sensor = sensors.setdefault(name, {})
