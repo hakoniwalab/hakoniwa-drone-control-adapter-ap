@@ -207,14 +207,16 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.runtime.mkdir(parents=True)
         self.source.mkdir()
         tuned = {
-            "simulation": {"timeStep": 0.003, "location": {"latitude": 47.641468, "longitude": -122.140165}},
+            "simulation": {"timeStep": 0.003, "location": {"latitude": 47.641468, "longitude": -122.140165,
+                                                          "magneticField": {"declination_deg": 15.16}}},
             "components": {
                 "droneDynamics": {"mujoco": {"modelPath": "drone.xml"}},
                 "sensors": {
                     "gps": {"delayMsec": 100, "noise": 1},
-                    "baro": {"delayMsec": 60},
-                    "mag": {"delayMsec": 20},
-                    "gyro": {"noise": 3, "drift": {"mode": "ardupilot-sitl"}},
+                    "baro": {"delayMsec": 60, "noise": 0.1},
+                    "mag": {"delayMsec": 20, "noise": 10},
+                    "gyro": {"noise": 3, "drift": {"mode": "ardupilot-sitl",
+                                                     "speedDegPerSecPerMin": 0.07, "timeMin": 4}},
                     "imu": {"noise": 2},
                 },
             },
@@ -246,17 +248,20 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertTrue((self.out / "params.parm").is_file())
         sitl_values = [line for line in (self.out / "sitl.parm").read_text().splitlines()
                        if line and not line.startswith("#")]
-        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "COMPASS_DEC,0.264505349", "SIM_SPEEDUP,1", "LOG_BITMASK,180223", "SIM_GPS_HZ,7",
+        self.assertEqual(sitl_values, ["ARMING_CHECK,0", "COMPASS_DEC,0.264591915", "SIM_SPEEDUP,1", "LOG_BITMASK,180223", "SIM_GPS_HZ,7",
                                        "INS_ACCEL_FILTER,30", "SIM_GPS_LAG_MS,100",
-                                       "SIM_BARO_DELAY,60"])
+                                       "SIM_BARO_DELAY,60", "SIM_MAG_DELAY,20",
+                                       "SIM_BARO_RND,0.173205", "SIM_MAG_RND,0.173205",
+                                       "SIM_GPS_NOISE,0", "SIM_BARO_COUNT,2",
+                                       "SIM_DRIFT_SPEED,0.07", "SIM_DRIFT_TIME,4"])
         self.assertNotIn("LOG_BITMASK", (self.out / "params.parm").read_text())
         config = json.loads((self.out / "drone_config" / "drone_config_0.json").read_text())
         self.assertEqual(config["simulation"]["timeStep"], 0.003)
         self.assertEqual(config["simulation"]["mavlink_tx_period_msec"]["hil_sensor"], 3)
         self.assertIn("sitl", config["simulation"])
         self.assertEqual(config["components"]["sensors"]["gps"], {"noise": 1})
-        self.assertEqual(config["components"]["sensors"]["baro"], {})
-        self.assertEqual(config["components"]["sensors"]["mag"], {})
+        self.assertEqual(config["components"]["sensors"]["baro"], {"noise": 0.1})
+        self.assertEqual(config["components"]["sensors"]["mag"], {"noise": 10})
         self.assertEqual(config["components"]["sensors"]["gyro"], {"noise": 3})
         self.assertEqual(config["components"]["sensors"]["imu"], {"noise": 2})
         self.assertTrue((self.out / "drone_config" / "drone.xml").is_file())
@@ -264,9 +269,43 @@ class SetupSitlRuntimeTest(unittest.TestCase):
             self.assertTrue((self.out / name).stat().st_mode & 0o111)
         marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
         self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed"], ["gps", "baro", "mag"])
+        self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed_values"],
+                         {"gps": 100, "baro": 60, "mag": 20})
+        self.assertIn("GPS/barometer/magnetometer", marker["aircraft_service_sensor_delay_reason"])
         self.assertIn("apply it twice", marker["aircraft_service_sensor_delay_reason"])
         self.assertTrue(marker["aircraft_service_gyro_drift_removed"])
+        self.assertEqual(marker["aircraft_service_gyro_drift_removed_value"]["timeMin"], 4)
         self.assertIn("apply it twice", marker["aircraft_service_gyro_drift_reason"])
+        self.assertEqual(marker["sensor_parameter_conversions"]["SIM_MAG_RND"]["source"],
+                         "components.sensors.mag.noise * sqrt(3) / 100")
+        self.assertEqual(marker["compass_declination"]["source"],
+                         "simulation.location.magneticField.declination_deg")
+
+    def test_sensor_conversion_warnings_and_drift_modes(self) -> None:
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        tuned["components"]["sensors"]["gyro"]["drift"] = {"mode": "random-walk"}
+        tuned_path.write_text(json.dumps(tuned))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.run_setup(self.service), 0)
+        self.assertIn("GPS noise is nonzero", stderr.getvalue())
+        self.assertIn("random-walk drift cannot be reproduced", stderr.getvalue())
+        values = (self.out / "sitl.parm").read_text()
+        self.assertIn("SIM_DRIFT_SPEED,0\n", values)
+        self.assertNotIn("SIM_DRIFT_TIME", values)
+
+    def test_no_drift_forces_zero_and_declination_mismatch_warns(self) -> None:
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        del tuned["components"]["sensors"]["gyro"]["drift"]
+        tuned["simulation"]["location"]["magneticField"]["declination_deg"] = 16
+        tuned_path.write_text(json.dumps(tuned))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.run_setup(self.service), 0)
+        self.assertIn("differs from ArduPilot's table", stderr.getvalue())
+        self.assertIn("COMPASS_DEC,0.27925268", (self.out / "sitl.parm").read_text())
 
     def test_missing_default_service_is_an_error(self) -> None:
         stderr = io.StringIO()
@@ -295,7 +334,7 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.source.mkdir()
 
     def run_prepare(self, sensors: dict | None = None, prop_inch: int | None = None,
-                    model_xml: str | None = None) -> tuple[dict, dict]:
+                    model_xml: str | None = None, sensor_preset: str | None = None) -> tuple[dict, dict]:
         source_config = {
             "simulation": {"location": {"latitude": 47.641468, "longitude": -122.140165}},
             "components": {"sensors": sensors or {}},
@@ -321,6 +360,8 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         argv = ["prepare", "--pro-root", str(self.base), str(self.source), str(self.output)]
         if prop_inch is not None:
             argv[1:1] = ["--prop-inch", str(prop_inch)]
+        if sensor_preset is not None:
+            argv[1:1] = ["--sensor-preset", sensor_preset]
         model = {
             "thrust_hover": 0.42, "hover_duty": 0.5,
             "spin_arm": 0.10, "spin_min": 0.15,
@@ -328,20 +369,24 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
             "motor_nominal_voltage": 12.0, "motor_hover_omega": 400.0,
             "spin_arm_thrust_hover": 0.04, "spin_min_thrust_hover": 0.09,
         }
+        stdout = io.StringIO()
         with patch.dict(sys.modules, modules), patch.object(sys, "argv", argv), \
              patch.object(PREPARE.subprocess, "run", side_effect=fake_px4_prepare), \
-             patch.object(PREPARE, "motor_thrust_model", return_value=model):
+             patch.object(PREPARE, "motor_thrust_model", return_value=model), \
+             contextlib.redirect_stdout(stdout):
             self.assertEqual(PREPARE.main(), 0)
+        self.prepare_stdout = stdout.getvalue()
         drone = json.loads((self.output / "drone_config_0.json").read_text())
         adapter = json.loads((self.output / "ardupilot-controller-config.json").read_text())
         return drone, adapter
 
-    def test_adds_default_sensor_delays_and_matching_adapter_parameters(self) -> None:
+    def test_missing_baro_delay_is_fixed_to_plugin_nav_ekf_default(self) -> None:
         drone, adapter = self.run_prepare()
-        self.assertEqual(drone["components"]["sensors"]["gps"]["delayMsec"], 100)
+        self.assertNotIn("delayMsec", drone["components"]["sensors"]["gps"])
         self.assertEqual(drone["components"]["sensors"]["baro"]["delayMsec"], 60)
-        self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 100)
+        self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 0)
         self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 60)
+        self.assertIn("plugin's NavEKF3 fixes EK3_HGT_DELAY at its 60 ms default", self.prepare_stdout)
         self.assertEqual(adapter["parameters"]["MOT_SPIN_ARM"], 0.10)
         self.assertEqual(adapter["parameters"]["MOT_SPIN_MIN"], 0.15)
         self.assertEqual(adapter["parameters"]["MOT_SPIN_MAX"], 0.95)
@@ -351,15 +396,18 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(adapter["parameters"]["motor_hover_omega"], 400.0)
         self.assertEqual(adapter["parameters"]["takeoff_slew_loop_rate_hz"], 400.0)
         self.assertAlmostEqual(drone["simulation"]["location"]["magneticField"]["declination_deg"], 15.15504, places=5)
-        self.assertEqual(drone["components"]["sensors"]["gyro"]["drift"]["mode"], "ardupilot-sitl")
-        self.assertEqual(drone["components"]["sensors"]["mag"]["noise"], 0)
-        self.assertAlmostEqual(
-            drone["components"]["sensors"]["baro"]["noise"], 0.2 / math.sqrt(3.0)
-        )
-        self.assertTrue(any("pressure_alt" in note for note in drone["notes"]))
-        self.assertTrue(any("Gaussian" in note and "uniform" in note for note in drone["notes"]))
+        self.assertNotIn("gyro", drone["components"]["sensors"])
+        self.assertNotIn("mag", drone["components"]["sensors"])
+        self.assertNotIn("noise", drone["components"]["sensors"]["baro"])
 
-    def test_sensor_noise_overrides_only_mag_and_baro(self) -> None:
+    def test_non_default_baro_delay_is_rejected_before_tuning(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            self.run_prepare({"baro": {"delayMsec": 59}})
+        self.assertIn("EK3_HGT_DELAY must be 60", stderr.getvalue())
+        self.assertIn("set the barometer delay to 60 ms instead", stderr.getvalue())
+
+    def test_sensor_characteristics_are_preserved_without_preset(self) -> None:
         original = {
             "acc": {"noise": 0.03}, "gyro": {"noise": 0.04},
             "mag": {"noise": 0.03}, "baro": {"noise": 0.01}, "gps": {"noise": 0.05},
@@ -369,8 +417,19 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(sensors["acc"]["noise"], 0.03)
         self.assertEqual(sensors["gyro"]["noise"], 0.04)
         self.assertEqual(sensors["gps"]["noise"], 0.05)
+        self.assertEqual(sensors["mag"]["noise"], 0.03)
+        self.assertEqual(sensors["baro"]["noise"], 0.01)
+
+    def test_explicit_sensor_preset_applies_ardupilot_defaults(self) -> None:
+        drone, adapter = self.run_prepare(sensor_preset="ardupilot-sitl-default")
+        sensors = drone["components"]["sensors"]
+        self.assertEqual(sensors["gps"]["delayMsec"], 100)
+        self.assertEqual(sensors["baro"]["delayMsec"], 60)
+        self.assertEqual(sensors["gyro"]["drift"], {
+            "mode": "ardupilot-sitl", "speedDegPerSecPerMin": 0.05, "timeMin": 5.0})
         self.assertEqual(sensors["mag"]["noise"], 0)
         self.assertAlmostEqual(sensors["baro"]["noise"], 0.2 / math.sqrt(3.0))
+        self.assertEqual(adapter["parameters"]["GPS1_DELAY_MS"], 100)
 
     def test_preserves_existing_sensor_delays(self) -> None:
         drone, adapter = self.run_prepare({"gps": {"delayMsec": 25}, "baro": {"delayMsec": 60}})

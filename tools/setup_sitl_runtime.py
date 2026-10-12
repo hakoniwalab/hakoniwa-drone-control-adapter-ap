@@ -21,8 +21,8 @@ directory with:
   drone_config/      the vehicle for Drone PRO's aircraft_service_ardupilot:
                      the profile's 3 ms vehicle with the SITL section
                      (actuator_to_rotor_index) of --sitl-drone-config. Sensor
-                     delayMsec values and gyro.drift are removed: ArduPilot SITL
-                     makes and delays GPS/barometer data and applies SIM_DRIFT_*
+                     gps/baro/mag delayMsec and gyro.drift are removed: ArduPilot
+                     SITL makes and delays those sensors and applies SIM_DRIFT_*
                      itself, so the aircraft service must not apply them twice
   run-service.bash   Drone PRO's standalone aircraft service (terminal 1)
   run-arducopter.bash arducopter with the two parameter files (terminal 2)
@@ -77,10 +77,50 @@ def sensor_delay_msec(drone_config: dict, sensor: str) -> float:
     return float(drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("delayMsec", 0.0))
 
 
+def sensor_noise(drone_config: dict, sensor: str) -> float:
+    """components.sensors.<sensor>.noise (Gaussian standard deviation; 0 when absent)."""
+    return float(drone_config.get("components", {}).get("sensors", {}).get(sensor, {}).get("noise", 0.0))
+
+
+def ardupilot_sensor_parameters(drone_config: dict) -> tuple[dict[str, float], list[str]]:
+    """Convert the vehicle sensor source of truth to ArduPilot SITL parameters."""
+    sensors = drone_config.get("components", {}).get("sensors", {})
+    params = {
+        "SIM_GPS_LAG_MS": sensor_delay_msec(drone_config, "gps"),
+        "SIM_BARO_DELAY": sensor_delay_msec(drone_config, "baro"),
+        "SIM_MAG_DELAY": sensor_delay_msec(drone_config, "mag"),
+        # AP_Baro_SITL adds rand_float() * baro_noise: a uniform [-value,+value] distribution.
+        "SIM_BARO_RND": sensor_noise(drone_config, "baro") * math.sqrt(3.0),
+        # AP_Compass_SITL.cpp lines 92-94 uses rand_vec3f()*mag_noise in milli-Gauss;
+        # AP_Math.cpp lines 352-359 defines each component as uniform [-1,+1].  1 mGauss=100 nT,
+        # hence sqrt(3) changes Gaussian std to an equal-std uniform amplitude and /100 changes units.
+        "SIM_MAG_RND": sensor_noise(drone_config, "mag") * math.sqrt(3.0) / 100.0,
+        "SIM_GPS_NOISE": 0.0,
+        "SIM_BARO_COUNT": 2.0,
+    }
+    warnings: list[str] = []
+    if sensor_noise(drone_config, "gps") != 0.0:
+        warnings.append("GPS noise is nonzero but its PRO units are mixed; SIM_GPS_NOISE remains 0")
+    drift = sensors.get("gyro", {}).get("drift")
+    if not drift:
+        params["SIM_DRIFT_SPEED"] = 0.0
+    elif drift.get("mode") == "ardupilot-sitl":
+        params["SIM_DRIFT_SPEED"] = float(drift.get("speedDegPerSecPerMin", 0.0))
+        params["SIM_DRIFT_TIME"] = float(drift.get("timeMin", 0.0))
+    elif drift.get("mode") == "random-walk":
+        params["SIM_DRIFT_SPEED"] = 0.0
+        warnings.append("gyro random-walk drift cannot be reproduced by ArduPilot SITL; SIM_DRIFT_SPEED remains 0")
+    else:
+        params["SIM_DRIFT_SPEED"] = 0.0
+        warnings.append(f"unknown gyro drift mode {drift.get('mode')!r}; SIM_DRIFT_SPEED remains 0")
+    return params, warnings
+
+
 def remove_service_sensor_delays(drone_config: dict) -> list[str]:
-    """Remove delayMsec from every aircraft-service sensor and return their names."""
+    """Remove delays that ArduPilot SITL applies; acc/gyro remain service-owned."""
     removed = []
-    for name, sensor_config in drone_config.get("components", {}).get("sensors", {}).items():
+    for name in ("gps", "baro", "mag"):
+        sensor_config = drone_config.get("components", {}).get("sensors", {}).get(name, {})
         if isinstance(sensor_config, dict) and "delayMsec" in sensor_config:
             del sensor_config["delayMsec"]
             removed.append(name)
@@ -160,6 +200,13 @@ def main() -> int:
     tuned = load_json(runtime / "drone_config" / "drone_config_0.json")
     location = tuned["simulation"]["location"]
     field = magnetic_field(float(location["latitude"]), float(location["longitude"]))
+    configured_declination = float(location.get("magneticField", {}).get("declination_deg", field["declination_deg"]))
+    if abs(configured_declination - field["declination_deg"]) >= 0.05:
+        print(f"WARNING: configured magnetic declination {configured_declination:g} deg differs from "
+              f"ArduPilot's table {field['declination_deg']:g} deg", file=sys.stderr)
+    sensor_params, sensor_warnings = ardupilot_sensor_parameters(tuned)
+    for warning in sensor_warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     sim_step_sec = float(tuned["simulation"]["timeStep"])
     tuned_accel_filter_hz = read_parm(params, "INS_ACCEL_FILTER")
     if tuned_accel_filter_hz is None:
@@ -169,7 +216,7 @@ def main() -> int:
         "ARMING_CHECK,0\n"          # no accel calibration in SITL; main loop at the sensor period (< 400 Hz)
         # A real vehicle retains the previous flight's auto-declination.  Seed SITL likewise so EKF
         # yaw is not initialised with zero before GPS provides the home location.
-        f"COMPASS_DEC,{math.radians(field['declination_deg']):.9g}\n"
+        f"COMPASS_DEC,{math.radians(configured_declination):.9g}\n"
         # SIM_SPEEDUP must be set for the AirSim backend: AP_Logger_File scales its IO timeout by it
         # (AP_Logger_File.cpp, timeout_ms *= sitl->speedup) and an unset value trapped the float
         # conversion, which aborted SITL with file logging on.
@@ -182,8 +229,7 @@ def main() -> int:
         f"# this value to get it (tools/setup_sitl_runtime.py, sitl_accel_filter_hz)\n"
         f"INS_ACCEL_FILTER,{sitl_accel_filter_hz(tuned_accel_filter_hz, sim_step_sec):g}\n"
         "# sensor delays of the vehicle (drone_config components.sensors.*.delayMsec)\n"
-        f"SIM_GPS_LAG_MS,{sensor_delay_msec(tuned, 'gps'):g}\n"
-        f"SIM_BARO_DELAY,{sensor_delay_msec(tuned, 'baro'):g}\n",
+        + "".join(f"{name},{value:g}\n" for name, value in sensor_params.items()),
         encoding="utf-8")
 
     # 3. The vehicle for the aircraft service: the tuning's 3 ms vehicle, the SITL section of the reference
@@ -199,7 +245,12 @@ def main() -> int:
     tuned["simulation"].setdefault("mavlink_tx_period_msec", {})["hil_sensor"] = max(1, int(round(sim_step_sec * 1000)))
     for key in ("controller",):
         tuned[key] = sitl_config.get(key, tuned.get(key))  # ArduPilot flies; the service's controller is the SITL one
+    removed_sensor_delay_values = {
+        name: sensor_delay_msec(tuned, name) for name in ("gps", "baro", "mag")
+        if "delayMsec" in tuned.get("components", {}).get("sensors", {}).get(name, {})
+    }
     removed_service_sensor_delays = remove_service_sensor_delays(tuned)
+    original_gyro_drift = tuned.get("components", {}).get("sensors", {}).get("gyro", {}).get("drift")
     removed_service_gyro_drift = remove_service_gyro_drift(tuned)
     write_json(config_dir / "drone_config_0.json", tuned)
 
@@ -234,11 +285,30 @@ cd {out}
         "profile": str(profile), "runtime": str(runtime), "sitl_drone_config": str(sitl_source),
         "arducopter": str(ARDUCOPTER), "arducopter_built": ARDUCOPTER.is_file(),
         "aircraft_service_sensor_delay_msec_removed": removed_service_sensor_delays,
+        "aircraft_service_sensor_delay_msec_removed_values": removed_sensor_delay_values,
         "aircraft_service_sensor_delay_reason":
-            "ArduPilot SITL creates and delays GPS/barometer data; service-side delay would apply it twice",
+            "ArduPilot SITL creates and delays GPS/barometer/magnetometer data; "
+            "service-side delay would apply it twice",
         "aircraft_service_gyro_drift_removed": removed_service_gyro_drift,
+        "aircraft_service_gyro_drift_removed_value": original_gyro_drift,
         "aircraft_service_gyro_drift_reason":
             "ArduPilot SITL applies SIM_DRIFT_*; service-side gyro drift would apply it twice",
+        "sensor_parameter_conversions": {
+            name: {"value": value, "source": {
+                "SIM_GPS_LAG_MS": "components.sensors.gps.delayMsec",
+                "SIM_BARO_DELAY": "components.sensors.baro.delayMsec",
+                "SIM_MAG_DELAY": "components.sensors.mag.delayMsec",
+                "SIM_BARO_RND": "components.sensors.baro.noise * sqrt(3)",
+                "SIM_MAG_RND": "components.sensors.mag.noise * sqrt(3) / 100",
+                "SIM_GPS_NOISE": "forced to 0 (PRO GPS noise units are unresolved)",
+                "SIM_BARO_COUNT": "ArduPilot SITL sensor count",
+                "SIM_DRIFT_SPEED": "components.sensors.gyro.drift",
+                "SIM_DRIFT_TIME": "components.sensors.gyro.drift.timeMin",
+            }[name]} for name, value in sensor_params.items()
+        },
+        "compass_declination": {"parameter": "COMPASS_DEC", "value_rad": math.radians(configured_declination),
+                                "source": "simulation.location.magneticField.declination_deg"},
+        "warnings": sensor_warnings,
     })
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():
