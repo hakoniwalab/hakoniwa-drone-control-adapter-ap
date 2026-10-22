@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.16)
 
 project(hakoniwa_drone_control_adapter_ap LANGUAGES CXX)
 
+option(HAKO_ENABLE_GOTO_SPEED_LIMIT
+    "Build against the goto-speed-enabled control adapter interface" OFF)
+if(HAKO_ENABLE_GOTO_SPEED_LIMIT)
+    add_compile_definitions(HAKO_ENABLE_GOTO_SPEED_LIMIT)
+endif()
+
 # ArduPilot's plugin always implements the flight-phase contract.  The public
 # headers, static library, plugin and tests must use the same ABI revision.
 add_compile_definitions(HAKO_ENABLE_FLIGHT_PHASE)
