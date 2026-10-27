@@ -61,7 +61,10 @@ configure_adapter() {
         -DBUILD_TESTING=ON
         -DCMAKE_BUILD_TYPE=Release
         "-DCMAKE_INSTALL_PREFIX=${install_root}"
-        -DHAKONIWA_AP_ENABLE_EKF3=ON)
+        -DHAKONIWA_AP_ENABLE_EKF3=ON
+        # Same switch as the PX4 adapter's build.bash: the plugin must be built
+        # against the same control adapter interface revision as Drone PRO.
+        "-DHAKO_ENABLE_GOTO_SPEED_LIMIT=${HAKO_ENABLE_GOTO_SPEED_LIMIT:-OFF}")
     if [[ "$(uname -s)" == "Darwin" ]]; then
         # Waf uses the current macOS SDK version when no deployment target is
         # supplied. Match it here so the DAL archive and adapter executables
