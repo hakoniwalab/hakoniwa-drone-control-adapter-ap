@@ -29,6 +29,8 @@ set(ADAPTER_INTERFACE_ROOT
 set(ARDUPILOT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ardupilot")
 set(ARDUPILOT_BUILD_ROOT "${ARDUPILOT_ROOT}/build/sitl")
 set(ARDUPILOT_DAL_LIBRARY "${ARDUPILOT_BUILD_ROOT}/lib/libAP_DAL_libs.a")
+set(ARDUPILOT_DAL_FILTERED_LIBRARY
+    "${CMAKE_CURRENT_BINARY_DIR}/libAP_DAL_libs_hakoniwa.a")
 if(NOT EXISTS "${ARDUPILOT_BUILD_ROOT}/ap_config.h")
     message(FATAL_ERROR
         "ArduPilot SITL configuration is missing: ${ARDUPILOT_BUILD_ROOT}/ap_config.h\n"
@@ -96,9 +98,47 @@ if(HAKONIWA_AP_ENABLE_EKF3 AND NOT EXISTS "${ARDUPILOT_DAL_LIBRARY}")
 endif()
 
 if(HAKONIWA_AP_ENABLE_EKF3)
+    # AP_HAL_SITL/system.cpp.o assumes a fully initialized SITL HAL, whereas
+    # this plugin supplies its own standalone clock.  AP_Math.cpp.o remains in
+    # the DAL archive and supplies calc_lowpass_alpha_dt() for this EKF build.
+    # Make one archive without that member on every platform, so the system
+    # API has no second definition at the final link.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${ARDUPILOT_DAL_LIBRARY}")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E copy
+            "${ARDUPILOT_DAL_LIBRARY}" "${ARDUPILOT_DAL_FILTERED_LIBRARY}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(
+        COMMAND "${CMAKE_AR}" d "${ARDUPILOT_DAL_FILTERED_LIBRARY}"
+            system.cpp.0.o
+        COMMAND_ERROR_IS_FATAL ANY)
     add_library(ardupilot_dal STATIC IMPORTED GLOBAL)
     set_target_properties(ardupilot_dal PROPERTIES
-        IMPORTED_LOCATION "${ARDUPILOT_DAL_LIBRARY}")
+        IMPORTED_LOCATION "${ARDUPILOT_DAL_FILTERED_LIBRARY}")
+    # The standalone smoke executables do not load DAL. Give those executables
+    # their own one-symbol helper; the plugin does not link this target and
+    # gets the sole EKF-build definition from DAL's AP_Math.cpp.o instead.
+    add_library(hakoniwa_drone_control_adapter_ap_lowpass STATIC
+        src/ardupilot_lowpass_helper.cpp)
+    target_include_directories(hakoniwa_drone_control_adapter_ap_lowpass PRIVATE
+        "${ARDUPILOT_BUILD_ROOT}"
+        "${ARDUPILOT_ROOT}/libraries")
+    target_compile_options(hakoniwa_drone_control_adapter_ap_lowpass PRIVATE
+        "SHELL:-include ap_config.h"
+        "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/hakoniwa/drone/control_adapter/ardupilot_adapter_config.hpp"
+        "-Wno-expansion-to-defined")
+    target_compile_definitions(hakoniwa_drone_control_adapter_ap_lowpass PRIVATE
+        ARDUPILOT_BUILD
+        AP_FILTER_NUM_FILTERS=0
+        AP_INLINE_VECTOR_OPS
+        __AP_LINE__=__LINE__
+        CONFIG_HAL_BOARD=HAL_BOARD_SITL
+        CONFIG_HAL_BOARD_SUBTYPE=HAL_BOARD_SUBTYPE_NONE)
+    function(hakoniwa_ap_link_standalone_lowpass target)
+        target_link_libraries(${target} PRIVATE
+            hakoniwa_drone_control_adapter_ap_lowpass)
+    endfunction()
     add_library(hakoniwa_drone_control_adapter_ap_ekf3 STATIC
         src/ap_ekf3_backend.cpp
         src/ardupilot_ekf3_runtime_shim.cpp)
@@ -135,8 +175,12 @@ if(HAKONIWA_AP_ENABLE_EKF3)
         APM_BUILD_DIRECTORY=APM_BUILD_AP_DAL_Standalone
         HAKONIWA_AP_DAL_ZERO_IMU_OFFSET=1
         HAL_EKF_IMU_MASK_DEFAULT=1)
+    # AP_Math.cpp.o in the filtered DAL archive is the sole low-pass helper
+    # provider in an EKF build.  Without EKF, the standalone shim provides it.
+    target_compile_definitions(hakoniwa_drone_control_adapter_ap PRIVATE
+        HAKONIWA_AP_DAL_MATH_LINKED=1)
     target_link_libraries(hakoniwa_drone_control_adapter_ap_ekf3
-        PRIVATE ardupilot_dal)
+        PRIVATE ardupilot_dal hakoniwa_drone_control_adapter_ap)
 endif()
 
 # The Control Link plugin (hakoniwa-drone-control-adapter adapter_plugin.hpp): a
@@ -159,6 +203,12 @@ if(HAKONIWA_AP_ENABLE_EKF3)
     if(APPLE)
         target_link_options(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
             "-Wl,-dead_strip" "-Wl,-exported_symbol,_hako_control_adapter_plugin_v1")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ap_plugin_exports.map"
+            "{ global: hako_control_adapter_plugin_v1; local: *; };\n")
+        target_link_options(hakoniwa_drone_control_adapter_ap_plugin PRIVATE
+            "-Wl,--gc-sections"
+            "-Wl,--version-script=${CMAKE_CURRENT_BINARY_DIR}/ap_plugin_exports.map")
     else()
         file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ap_plugin_exports.map"
             "{ global: hako_control_adapter_plugin_v1; local: *; };\n")
@@ -174,7 +224,8 @@ install(TARGETS hakoniwa_drone_control_adapter_ap
 if(HAKONIWA_AP_ENABLE_EKF3)
     install(TARGETS hakoniwa_drone_control_adapter_ap_ekf3
         EXPORT hakoniwa_drone_control_adapter_apTargets ARCHIVE DESTINATION lib)
-    install(FILES "${ARDUPILOT_DAL_LIBRARY}" DESTINATION lib)
+    install(FILES "${ARDUPILOT_DAL_FILTERED_LIBRARY}" DESTINATION lib
+        RENAME "libAP_DAL_libs.a")
 endif()
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY thirdparty/hakoniwa-drone-control-adapter/include/ DESTINATION include)
@@ -199,12 +250,18 @@ if(BUILD_TESTING)
 
     add_executable(ap_contract_smoke test/ap_contract_smoke.cpp)
     target_link_libraries(ap_contract_smoke PRIVATE hakoniwa_drone_control_adapter_ap)
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_contract_smoke)
+    endif()
     add_test(NAME ap_contract_smoke COMMAND ap_contract_smoke
         ${CMAKE_CURRENT_SOURCE_DIR}/config/ardupilot-controller-config.json)
     add_executable(ap_attitude_control_backend_smoke
         test/ap_attitude_control_backend_smoke.cpp)
     target_link_libraries(ap_attitude_control_backend_smoke
         PRIVATE hakoniwa_drone_control_adapter_ap)
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_attitude_control_backend_smoke)
+    endif()
     add_test(NAME ap_attitude_control_backend_smoke
         COMMAND ap_attitude_control_backend_smoke)
 
@@ -212,6 +269,9 @@ if(BUILD_TESTING)
         test/ap_control_allocation_backend_smoke.cpp)
     target_link_libraries(ap_control_allocation_backend_smoke
         PRIVATE hakoniwa_drone_control_adapter_ap)
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_control_allocation_backend_smoke)
+    endif()
     add_test(NAME ap_control_allocation_backend_smoke
         COMMAND ap_control_allocation_backend_smoke)
 
@@ -219,6 +279,9 @@ if(BUILD_TESTING)
         test/ap_rate_control_backend_smoke.cpp)
     target_link_libraries(ap_rate_control_backend_smoke
         PRIVATE hakoniwa_drone_control_adapter_ap)
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_rate_control_backend_smoke)
+    endif()
     add_test(NAME ap_rate_control_backend_smoke
         COMMAND ap_rate_control_backend_smoke)
 
@@ -226,6 +289,9 @@ if(BUILD_TESTING)
         test/ap_position_control_backends_smoke.cpp)
     target_link_libraries(ap_position_control_backends_smoke
         PRIVATE hakoniwa_drone_control_adapter_ap)
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_position_control_backends_smoke)
+    endif()
     add_test(NAME ap_position_control_backends_smoke
         COMMAND ap_position_control_backends_smoke)
 
@@ -234,6 +300,9 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/plugin)
     target_link_libraries(ap_sensor_filters_smoke PRIVATE
         hakoniwa_drone_control_adapter_ap ${CMAKE_DL_LIBS})
+    if(HAKONIWA_AP_ENABLE_EKF3)
+        hakoniwa_ap_link_standalone_lowpass(ap_sensor_filters_smoke)
+    endif()
     add_dependencies(ap_sensor_filters_smoke hakoniwa_drone_control_adapter_ap_plugin)
     add_test(NAME ap_sensor_filters_smoke COMMAND ap_sensor_filters_smoke
         $<TARGET_FILE:hakoniwa_drone_control_adapter_ap_plugin>

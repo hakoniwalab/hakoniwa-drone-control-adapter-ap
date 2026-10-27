@@ -4,7 +4,10 @@
 // ArduPilot vehicle process. It therefore has no HAL clock or EEPROM-backed
 // AP_Param store. These narrow definitions provide only the runtime contract
 // needed by AC_PID; controller values are supplied explicitly by the adapter.
-// The math helper behavior below follows ArduPilot 4.6.3 AP_Math.cpp.
+// The DAL archive used by this project omits AP_HAL_SITL/system.cpp.o: that
+// object requires a complete SITL HAL which this adapter deliberately does
+// not initialize.  These implementations are the sole definitions of its
+// public system API and use the adapter's standalone monotonic clock.
 
 #include <AP_HAL/system.h>
 #include <AP_Math/AP_Math.h>
@@ -12,10 +15,14 @@
 #include <AP_Param/AP_Param.h>
 
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <type_traits>
 
+#if !defined(HAKONIWA_AP_STANDALONE_MATH_ONLY)
 // Weak: the control stages set their values from their own configuration, but
 // NavEKF3 needs its parameter defaults. When the EKF3 runtime shim is linked in
 // as well (the Control Link plugin), its implementation must be the one used.
@@ -31,9 +38,11 @@ bool AP_Param::load()
 void AP_Param::save(bool)
 {
 }
+#endif
 
-// AP_Math/control.cpp reports invalid arguments through INTERNAL_ERROR; this adapter has no
-// vehicle to flag, the caller validates its limits. Weak: the EKF3 runtime may provide the real one.
+// Non-EKF control code reports invalid arguments through INTERNAL_ERROR; this
+// adapter has no vehicle to flag, so its standalone runtime records nothing.
+#if !defined(HAKONIWA_AP_DAL_MATH_LINKED)
 __attribute__((weak)) void AP_InternalError::error(const AP_InternalError::error_t, uint16_t)
 {
 }
@@ -45,21 +54,74 @@ __attribute__((weak)) AP_InternalError& internalerror()
     return instance;
 }
 }  // namespace AP
+#endif
 
+#if !defined(HAKONIWA_AP_STANDALONE_MATH_ONLY)
 namespace AP_HAL {
 
-uint32_t millis()
+namespace {
+uint64_t elapsed_micros()
 {
     using Clock = std::chrono::steady_clock;
     static const auto epoch = Clock::now();
-    return static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::now() - epoch)
-            .count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        Clock::now() - epoch).count());
+}
+}  // namespace
+
+void init()
+{
+}
+
+void panic(const char* errormsg, ...)
+{
+    std::va_list args;
+    va_start(args, errormsg);
+    std::vfprintf(stderr, errormsg, args);
+    va_end(args);
+    std::fputc('\n', stderr);
+    std::abort();
+}
+
+uint32_t micros()
+{
+    return static_cast<uint32_t>(micros64());
+}
+
+uint32_t millis()
+{
+    return static_cast<uint32_t>(millis64());
+}
+
+uint16_t millis16()
+{
+    return static_cast<uint16_t>(millis64());
+}
+
+uint64_t micros64()
+{
+    return elapsed_micros();
+}
+
+uint64_t millis64()
+{
+    return micros64() / 1000U;
+}
+
+void dump_stack_trace()
+{
+}
+
+void dump_core_file()
+{
 }
 
 }  // namespace AP_HAL
+#endif
 
+#if !defined(HAKONIWA_AP_DAL_MATH_LINKED)
+// Non-EKF builds do not link AP_Math.cpp.o, so retain its matching low-pass
+// helper here.  EKF builds receive the sole definition from the DAL archive.
 float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
 {
     if (dt < 0.0f || cutoff_freq < 0.0f) {
@@ -74,7 +136,11 @@ float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
     const float rc = 1.0f / (M_2PI * cutoff_freq);
     return dt / (dt + rc);
 }
+#endif
 
+// Non-EKF builds do not link DAL's AP_Math/vector3.cpp.o or AP_Math.cpp.o.
+// Keep their standalone math support here only in that configuration.
+#if !defined(HAKONIWA_AP_DAL_MATH_LINKED)
 // AP_Math/vector3.cpp's Vector3<float>::length, which AP_Math/control.cpp (kinematic_limit) uses.
 template <>
 float Vector3<float>::length() const
@@ -139,3 +205,4 @@ template bool is_equal<short>(short, short);
 template bool is_equal<long>(long, long);
 template bool is_equal<float>(float, float);
 template bool is_equal<double>(double, double);
+#endif
