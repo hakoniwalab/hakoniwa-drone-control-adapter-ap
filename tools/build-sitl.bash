@@ -3,14 +3,14 @@
 #
 # The adapter's own build (build.bash) configures ArduPilot with --no-gcs for
 # the NavEKF3 library, so the vehicle binary is built in a separate waf output
-# directory: thirdparty/ardupilot/build-hako-sitl/sitl/bin/arducopter.
+# directory: thirdparty/ardupilot/build/hako-sitl/sitl/bin/arducopter.
 #
 # Usage: bash tools/build-sitl.bash [--clean]
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ardupilot="${root}/thirdparty/ardupilot"
-out="build-hako-sitl"
+out="build/hako-sitl"
 venv="${root}/work/sitl-venv"
 python="${ARDUPILOT_PYTHON:-python3}"
 
