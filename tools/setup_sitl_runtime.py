@@ -53,7 +53,7 @@ from ardupilot_declination import magnetic_field
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = ROOT / "tuning" / "export_ardupilot_params.py"
-ARDUCOPTER = ROOT / "thirdparty" / "ardupilot" / "build-hako-sitl" / "sitl" / "bin" / "arducopter"
+ARDUCOPTER = ROOT / "thirdparty" / "ardupilot" / "build" / "hako-sitl" / "sitl" / "bin" / "arducopter"
 MARKER = "ardupilot-sitl-runtime.json"
 SITL_PORT_SENSOR_IN = 9003   # ArduPilot <- Drone PRO sensors
 SITL_PORT_ACTUATOR_OUT = 9002  # ArduPilot -> Drone PRO actuators
