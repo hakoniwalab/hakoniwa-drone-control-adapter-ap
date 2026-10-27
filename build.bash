@@ -9,6 +9,7 @@ readonly action="${1:-build}"
 readonly install_root="${INSTALL_PREFIX:-${project_root}/install}"
 readonly ardupilot_python="${ARDUPILOT_PYTHON:-python3}"
 readonly ardupilot_patch="${project_root}/patches/ardupilot-4.6.3-dal-standalone-zero-imu-offset.patch"
+readonly ardupilot_pic_stamp="${ardupilot_root}/build/sitl/.hakoniwa-dal-pic"
 ardupilot_patch_applied=0
 
 restore_ardupilot_patch() {
@@ -38,18 +39,38 @@ trap restore_ardupilot_patch EXIT
 configure_ardupilot() {
     (
         cd "${ardupilot_root}"
-        "${ardupilot_python}" ./waf configure \
+        local -a waf_environment=(env)
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            # libAP_DAL_libs.a is linked into the adapter plugin.  GNU ld
+            # requires every object in that archive to be position independent.
+            waf_environment+=("CFLAGS=${CFLAGS:-} -fPIC" "CXXFLAGS=${CXXFLAGS:-} -fPIC")
+        fi
+        "${waf_environment[@]}" "${ardupilot_python}" ./waf configure \
             --board sitl \
             --disable-scripting \
             --no-gcs \
             --enable-EKF3
         "${ardupilot_python}" ./waf build --targets tool/AP_DAL_Standalone
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            printf '%s\n' 'linux-fpic-v1' > "${ardupilot_pic_stamp}"
+        fi
     )
 }
 
 ensure_ardupilot_configured() {
+    local needs_configure=0
     if [[ ! -f "${ardupilot_root}/build/sitl/ap_config.h" \
         || ! -f "${ardupilot_root}/build/sitl/lib/libAP_DAL_libs.a" ]]; then
+        needs_configure=1
+    elif [[ "$(uname -s)" == "Linux" \
+        && ( ! -f "${ardupilot_pic_stamp}" \
+            || "$(<"${ardupilot_pic_stamp}")" != "linux-fpic-v1" ) ]]; then
+        # A pre-stamp archive was built without -fPIC.  Removing only the
+        # archive is insufficient because waf would reuse its non-PIC objects.
+        cmake -E remove_directory "${ardupilot_root}/build/sitl"
+        needs_configure=1
+    fi
+    if [[ "${needs_configure}" -eq 1 ]]; then
         configure_ardupilot
     fi
 }
