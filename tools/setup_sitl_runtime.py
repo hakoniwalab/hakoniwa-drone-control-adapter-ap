@@ -213,6 +213,8 @@ def main() -> int:
                         help="SIM_GPS_HZ override (default 5; gps.updatePeriodMsec takes precedence)")
     parser.add_argument("--service", help="Drone PRO's aircraft_service_ardupilot binary "
                         "(default <pro-root>/.hako/build/main_for_sample/service/aircraft_service_ardupilot)")
+    parser.add_argument("--no-service-script", action="store_true",
+                        help="do not require the aircraft service or write run-service.bash")
     args = parser.parse_args()
 
     pro_root = Path(args.pro_root).resolve()
@@ -330,10 +332,11 @@ def main() -> int:
     # 4. Launch scripts
     service = Path(args.service).resolve() if args.service else \
         pro_root / ".hako" / "build" / "main_for_sample" / "service" / "aircraft_service_ardupilot"
-    if not service.is_file():
-        print(f"ERROR: the aircraft service was not found: {service} (build Drone PRO, or pass --service)", file=sys.stderr)
-        return 1
-    (out / "run-service.bash").write_text(f"""#!/usr/bin/env bash
+    if not args.no_service_script:
+        if not service.is_file():
+            print(f"ERROR: the aircraft service was not found: {service} (build Drone PRO, or pass --service)", file=sys.stderr)
+            return 1
+        (out / "run-service.bash").write_text(f"""#!/usr/bin/env bash
 # Terminal 1: Drone PRO's standalone aircraft service (MuJoCo, 3 ms), paced to real time.
 cd {pro_root}
 DYLD_LIBRARY_PATH=vendor/mujoco/lib \\
@@ -351,12 +354,16 @@ cd {out}
   --serial0=udpclient:127.0.0.1:{MAVLINK_PORT} \\
   --defaults {params},{out / 'sitl.parm'} "$@"
 """, encoding="utf-8")
-    for script in ("run-service.bash", "run-arducopter.bash"):
+    scripts = ["run-arducopter.bash"]
+    if not args.no_service_script:
+        scripts.append("run-service.bash")
+    for script in scripts:
         (out / script).chmod(0o755)
 
     write_json(out / MARKER, {
         "profile": str(profile), "runtime": str(runtime), "sitl_drone_config": str(sitl_source),
         "arducopter": str(ARDUCOPTER), "arducopter_built": ARDUCOPTER.is_file(),
+        "service_script": not args.no_service_script,
         "aircraft_service_sensor_delay_msec_removed": removed_service_sensor_delays,
         "aircraft_service_sensor_delay_msec_removed_values": removed_sensor_delay_values,
         "aircraft_service_sensor_delay_reason":
@@ -405,8 +412,11 @@ cd {out}
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():
         print(f"NOTE: arducopter is not built yet: bash tools/build-sitl.bash", file=sys.stderr)
-    print(f"  terminal 1: bash {out}/run-service.bash")
-    print(f"  terminal 2: bash {out}/run-arducopter.bash")
+    if not args.no_service_script:
+        print(f"  terminal 1: bash {out}/run-service.bash")
+        print(f"  terminal 2: bash {out}/run-arducopter.bash")
+    else:
+        print(f"  arducopter: bash {out}/run-arducopter.bash")
     print(f"  fly:        python {pro_root}/drone_api/mavlink_rpc/commands/takeoff_client.py 5 --connection udpin:127.0.0.1:{MAVLINK_PORT}")
     return 0
 

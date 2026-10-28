@@ -231,13 +231,21 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.service.write_text("binary", encoding="utf-8")
         self.out = self.base / "out"
 
-    def run_setup(self, service: Path | None = None, gps_hz: float | None = 7.0) -> int:
+    def run_setup(
+        self,
+        service: Path | None = None,
+        gps_hz: float | None = 7.0,
+        *,
+        no_service_script: bool = False,
+    ) -> int:
         argv = ["setup", "--pro-root", str(self.pro), "--profile", str(self.profile),
                 "--sitl-drone-config", str(self.source), "--out", str(self.out)]
         if gps_hz is not None:
             argv += ["--gps-hz", str(gps_hz)]
         if service is not None:
             argv += ["--service", str(service)]
+        if no_service_script:
+            argv.append("--no-service-script")
 
         def fake_export(command, check):
             Path(command[command.index("--out") + 1]).write_text(
@@ -274,6 +282,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         for name in ("run-service.bash", "run-arducopter.bash"):
             self.assertTrue((self.out / name).stat().st_mode & 0o111)
         marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertTrue(marker["service_script"])
         self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed"], ["gps", "baro", "mag"])
         self.assertEqual(marker["aircraft_service_sensor_delay_msec_removed_values"],
                          {"gps": 100, "baro": 60, "mag": 20})
@@ -392,6 +401,17 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             self.assertEqual(self.run_setup(), 1)
         self.assertIn("aircraft service was not found", stderr.getvalue())
+
+    def test_no_service_script_skips_service_check_and_script(self) -> None:
+        self.assertEqual(self.run_setup(no_service_script=True), 0)
+
+        self.assertFalse((self.out / "run-service.bash").exists())
+        self.assertTrue((self.out / "run-arducopter.bash").stat().st_mode & 0o111)
+        self.assertTrue((self.out / "params.parm").is_file())
+        self.assertTrue((self.out / "sitl.parm").is_file())
+        self.assertTrue((self.out / "drone_config" / "drone_config_0.json").is_file())
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertFalse(marker["service_script"])
 
     def test_one_millisecond_step_keeps_accel_filter_and_submillisecond_period_is_clamped(self) -> None:
         self.assertEqual(SETUP.sitl_accel_filter_hz(10, 0.001), 10)
