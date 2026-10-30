@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// [SEN-COM-350] The mount parameters reach NavEKF3 through ApEkf3Backend (orientation, INS_POS1, GPS1_POS).
+// [SEN-COM-350] [SEN-COM-295] The mount parameters reach NavEKF3 through ApEkf3Backend (orientation, INS_POS1, GPS1_POS).
 #include <hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp>
 #include "hakoniwa/drone/control_adapter/ap_sensor_model_v2.hpp"
 
