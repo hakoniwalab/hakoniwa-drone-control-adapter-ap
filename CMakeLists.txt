@@ -369,5 +369,17 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME ap_ekf3_backend_motion_smoke
             COMMAND ap_ekf3_backend_motion_smoke)
+
+        if(HAKO_ENABLE_SENSOR_MODEL_V2)
+            add_executable(ap_sensor_model_v2_ekf_smoke test/ap_sensor_model_v2_ekf_smoke.cpp)
+            target_link_libraries(ap_sensor_model_v2_ekf_smoke
+                PRIVATE hakoniwa_drone_control_adapter_ap_ekf3 hakoniwa_drone_control_adapter_ap)
+            if(APPLE)
+                target_link_options(ap_sensor_model_v2_ekf_smoke PRIVATE "-Wl,-dead_strip")
+            elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+                target_link_options(ap_sensor_model_v2_ekf_smoke PRIVATE "-Wl,--gc-sections")
+            endif()
+            add_test(NAME ap_sensor_model_v2_ekf_smoke COMMAND ap_sensor_model_v2_ekf_smoke)
+        endif()
     endif()
 endif()
