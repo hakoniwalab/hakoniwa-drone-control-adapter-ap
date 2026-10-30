@@ -249,6 +249,10 @@ def main() -> int:
         print(f"WARNING: configured magnetic declination {configured_declination:g} deg differs from "
               f"ArduPilot's table {field['declination_deg']:g} deg", file=sys.stderr)
     sensor_params, sensor_warnings = ardupilot_sensor_parameters(tuned)
+    mount_provenance_path = runtime / "drone_config" / "sensor-model-v2-provenance.json"
+    mount_params = {}
+    if mount_provenance_path.is_file():
+        mount_params = load_json(mount_provenance_path).get("ardupilot_parameters", {})
     update_periods = {
         name: sensor_update_period_msec(tuned, name)
         for name in ("acc", "gyro", "baro", "mag", "gps")
@@ -304,7 +308,10 @@ def main() -> int:
         f"# this value to get it (tools/setup_sitl_runtime.py, sitl_accel_filter_hz)\n"
         f"INS_ACCEL_FILTER,{sitl_accel_filter_hz(tuned_accel_filter_hz, sim_step_sec):g}\n"
         "# sensor delays of the vehicle (drone_config components.sensors.*.delayMsec)\n"
-        + "".join(f"{name},{value:g}\n" for name, value in sensor_params.items()),
+        + "".join(f"{name},{value:g}\n" for name, value in sensor_params.items())
+        # [SEN-COM-300] Use the exact mount/calibration values recorded when tuning began.
+        + "# Sensor Model v2 mount and compass calibration from tuning provenance\n"
+        + "".join(f"{name},{value:g}\n" for name, value in mount_params.items()),
         encoding="utf-8")
 
     # 3. The vehicle for the aircraft service: the tuning's 3 ms vehicle, the SITL section of the reference
