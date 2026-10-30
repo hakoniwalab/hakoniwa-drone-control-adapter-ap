@@ -119,7 +119,7 @@ void dump_core_file()
 }  // namespace AP_HAL
 #endif
 
-#if !defined(HAKONIWA_AP_DAL_MATH_LINKED)
+#if !defined(HAKONIWA_AP_DAL_MATH_LINKED) && !defined(HAKO_ENABLE_SENSOR_MODEL_V2)
 // Non-EKF builds do not link AP_Math.cpp.o, so retain its matching low-pass
 // helper here.  EKF builds receive the sole definition from the DAL archive.
 float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
@@ -140,7 +140,7 @@ float calc_lowpass_alpha_dt(float dt, float cutoff_freq)
 
 // Non-EKF builds do not link DAL's AP_Math/vector3.cpp.o or AP_Math.cpp.o.
 // Keep their standalone math support here only in that configuration.
-#if !defined(HAKONIWA_AP_DAL_MATH_LINKED)
+#if !defined(HAKONIWA_AP_DAL_MATH_LINKED) && !defined(HAKO_ENABLE_SENSOR_MODEL_V2)
 // AP_Math/vector3.cpp's Vector3<float>::length, which AP_Math/control.cpp (kinematic_limit) uses.
 template <>
 float Vector3<float>::length() const

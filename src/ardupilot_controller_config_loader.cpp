@@ -27,6 +27,58 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_file(const 
 }
 ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const std::string& s) const {
     ArdupilotControllerConfig c{};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    auto& sensor = c.sensor_model_v2;
+    const double orientation = optional_number(s, "AHRS_ORIENTATION", 0.0);
+    if (!std::isfinite(orientation) || orientation != std::trunc(orientation)) {
+        throw std::invalid_argument("AHRS_ORIENTATION must be an integer");
+    }
+    sensor.board_orientation = static_cast<int>(orientation);
+    const bool standard_orientation = (sensor.board_orientation >= 0 && sensor.board_orientation <= 37)
+        || sensor.board_orientation == 39 || sensor.board_orientation == 40
+        || sensor.board_orientation == 42 || sensor.board_orientation == 43;
+    if (!(standard_orientation || sensor.board_orientation == 101)) {
+        throw std::invalid_argument("AHRS_ORIENTATION must be a supported Rotation or 101 (Custom 1)");
+    }
+    const double custom_rotation_enable = optional_number(s, "CUST_ROT_ENABLE", 0.0);
+    if (custom_rotation_enable != 0.0 && custom_rotation_enable != 1.0) {
+        throw std::invalid_argument("CUST_ROT_ENABLE must be 0 or 1");
+    }
+    sensor.custom_rotation_enabled = custom_rotation_enable == 1.0;
+    sensor.custom_rotation_deg = {
+        optional_number(s, "CUST_ROT1_ROLL", 0.0),
+        optional_number(s, "CUST_ROT1_PITCH", 0.0),
+        optional_number(s, "CUST_ROT1_YAW", 0.0)};
+    if (sensor.board_orientation == 101 && !sensor.custom_rotation_enabled) {
+        throw std::invalid_argument("AHRS_ORIENTATION 101 requires CUST_ROT_ENABLE=1");
+    }
+    for (const double angle : sensor.custom_rotation_deg) {
+        if (!std::isfinite(angle) || angle < -360.0 || angle > 360.0) {
+            throw std::invalid_argument("CUST_ROT1_ROLL/PITCH/YAW must be finite and within -360..360 degrees");
+        }
+    }
+    sensor.imu_position_body_m = {
+        optional_number(s, "INS_POS1_X", 0.0), optional_number(s, "INS_POS1_Y", 0.0),
+        optional_number(s, "INS_POS1_Z", 0.0)};
+    sensor.gps_position_body_m = {
+        optional_number(s, "GPS1_POS_X", 0.0), optional_number(s, "GPS1_POS_Y", 0.0),
+        optional_number(s, "GPS1_POS_Z", 0.0)};
+    sensor.mag_offset_milligauss = {
+        optional_number(s, "COMPASS_OFS_X", 0.0), optional_number(s, "COMPASS_OFS_Y", 0.0),
+        optional_number(s, "COMPASS_OFS_Z", 0.0)};
+    sensor.mag_diagonal = {
+        optional_number(s, "COMPASS_DIA_X", 1.0), optional_number(s, "COMPASS_DIA_Y", 1.0),
+        optional_number(s, "COMPASS_DIA_Z", 1.0)};
+    sensor.mag_offdiagonal = {
+        optional_number(s, "COMPASS_ODI_X", 0.0), optional_number(s, "COMPASS_ODI_Y", 0.0),
+        optional_number(s, "COMPASS_ODI_Z", 0.0)};
+    for (const auto& values : {sensor.imu_position_body_m, sensor.gps_position_body_m,
+             sensor.mag_offset_milligauss, sensor.mag_diagonal, sensor.mag_offdiagonal}) {
+        for (const double value : values) {
+            if (!std::isfinite(value)) throw std::invalid_argument("sensor model parameters must be finite");
+        }
+    }
+#endif
     c.runtime.altitude_hz=number(s,"altitude_hz"); c.runtime.horizontal_hz=number(s,"horizontal_hz");
     c.runtime.attitude_hz=number(s,"attitude_hz"); c.runtime.rate_hz=number(s,"rate_hz");
     c.sensor_filter.gyro_cutoff_hz=optional_number(s,"INS_GYRO_FILTER",0.0); c.sensor_filter.accel_cutoff_hz=optional_number(s,"INS_ACCEL_FILTER",0.0);

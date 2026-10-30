@@ -83,6 +83,7 @@ configure_adapter() {
         -DCMAKE_BUILD_TYPE=Release
         "-DCMAKE_INSTALL_PREFIX=${install_root}"
         -DHAKONIWA_AP_ENABLE_EKF3=ON
+        "-DHAKO_ENABLE_SENSOR_MODEL_V2=${HAKO_ENABLE_SENSOR_MODEL_V2:-OFF}"
         # Same switch as the PX4 adapter's build.bash: the plugin must be built
         # against the same control adapter interface revision as Drone PRO.
         "-DHAKO_ENABLE_GOTO_SPEED_LIMIT=${HAKO_ENABLE_GOTO_SPEED_LIMIT:-OFF}")

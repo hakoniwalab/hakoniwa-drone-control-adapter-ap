@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cmath>
+#include <array>
 #include <string>
 #include "hakoniwa/drone/control_adapter/ap_altitude_control_backend.hpp"
 #include "hakoniwa/drone/control_adapter/ap_attitude_control_backend.hpp"
@@ -30,10 +31,25 @@ struct ArdupilotEkfConfig {
     double hgt_delay_ms{60.0};
     std::string debug_csv{};
 };
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+struct ArdupilotSensorModelV2Config {
+    int board_orientation{0};
+    bool custom_rotation_enabled{false};
+    std::array<double, 3> custom_rotation_deg{};
+    std::array<double, 3> imu_position_body_m{};
+    std::array<double, 3> gps_position_body_m{};
+    std::array<double, 3> mag_offset_milligauss{};
+    std::array<double, 3> mag_diagonal{{1.0, 1.0, 1.0}};
+    std::array<double, 3> mag_offdiagonal{};
+};
+#endif
 struct ArdupilotControllerConfig {
     ArdupilotControllerRuntimeConfig runtime{};
     ArdupilotSensorFilterConfig sensor_filter{};
     ArdupilotEkfConfig ekf{};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    ArdupilotSensorModelV2Config sensor_model_v2{};
+#endif
     // AC_PosControl input shaping of the 3D stage's position target (WPNAV_ACCEL, WPNAV_ACCEL_Z in m/s^2,
     // PSC_JERK_XY, PSC_JERK_Z in m/s^3; runtime.position_input_shaping 0 turns it off). An acceleration_xy
     // of 0 is derived when the stage is made: 0.5 g tan(lean angle limit), ArduCopter's WPNAV_ACCEL

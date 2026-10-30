@@ -11,6 +11,9 @@
 #include "hakoniwa/drone/control_adapter/ap_position_control_3d_backend.hpp"
 #include "hakoniwa/drone/control_adapter/ap_rate_control_backend.hpp"
 #include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+#include "hakoniwa/drone/control_adapter/ap_sensor_model_v2.hpp"
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -73,6 +76,9 @@ class FilteredRateControl final : public IRateControlBackend {
 public:
     FilteredRateControl(const ArdupilotControllerConfig& config)
         : inner_(config.rate_control)
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        , config_(config.sensor_model_v2)
+#endif
     {
         for (auto* filter : {&p_, &q_, &r_}) {
             filter->configure(config.runtime.rate_hz, config.sensor_filter.gyro_cutoff_hz);
@@ -88,16 +94,49 @@ public:
     BodyTorqueCommand run(const RateControlInput& input) override
     {
         RateControlInput filtered = input;
-        filtered.rate.p = p_.apply(input.rate.p);
-        filtered.rate.q = q_.apply(input.rate.q);
-        filtered.rate.r = r_.apply(input.rate.r);
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        // [SEN-COM-350] AP_InertialSensor rotates gyro values before filtering and control.
+        const auto rate = ap_rotate_sensor_to_body(config_, {input.rate.p, input.rate.q, input.rate.r});
+        const auto accel = ap_rotate_sensor_to_body(config_,
+            {input.angular_accel.p_dot, input.angular_accel.q_dot, input.angular_accel.r_dot});
+        filtered.rate = {rate[0], rate[1], rate[2]};
+        filtered.angular_accel = {accel[0], accel[1], accel[2]};
+#endif
+        filtered.rate.p = p_.apply(filtered.rate.p);
+        filtered.rate.q = q_.apply(filtered.rate.q);
+        filtered.rate.r = r_.apply(filtered.rate.r);
         return inner_.run(filtered);
     }
 
 private:
     ApRateControlBackend inner_;
     Biquad2p p_, q_, r_;
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    ArdupilotSensorModelV2Config config_;
+#endif
 };
+
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+class RotatedRateControl final : public IRateControlBackend {
+public:
+    explicit RotatedRateControl(const ArdupilotControllerConfig& config)
+        : inner_(config.rate_control), config_(config.sensor_model_v2) {}
+    void reset() override { inner_.reset(); }
+    BodyTorqueCommand run(const RateControlInput& input) override
+    {
+        RateControlInput body = input;
+        const auto rate = ap_rotate_sensor_to_body(config_, {input.rate.p, input.rate.q, input.rate.r});
+        const auto accel = ap_rotate_sensor_to_body(config_,
+            {input.angular_accel.p_dot, input.angular_accel.q_dot, input.angular_accel.r_dot});
+        body.rate = {rate[0], rate[1], rate[2]};
+        body.angular_accel = {accel[0], accel[1], accel[2]};
+        return inner_.run(body);
+    }
+private:
+    ApRateControlBackend inner_;
+    ArdupilotSensorModelV2Config config_;
+};
+#endif
 
 // Altitude control on the vertical acceleration filtered at INS_ACCEL_FILTER.
 class FilteredAltitudeControl final : public IAltitudeControlBackend {

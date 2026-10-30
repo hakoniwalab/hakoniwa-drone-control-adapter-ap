@@ -7,6 +7,9 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_NavEKF/AP_Nav_Common.h>
 #include <AP_NavEKF3/AP_NavEKF3.h>
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+#include "hakoniwa/drone/control_adapter/ap_sensor_model_v2.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -150,14 +153,21 @@ public:
         imu_.get_delta_angle_ret = true;
         imu_.delta_velocity_dt = static_cast<float>(dt_sec);
         imu_.delta_angle_dt = static_cast<float>(dt_sec);
-        imu_.delta_velocity = Vector3f{
-            finite_float(input.xacc_mps2, "xacc") * imu_.delta_velocity_dt,
-            finite_float(input.yacc_mps2, "yacc") * imu_.delta_velocity_dt,
-            finite_float(input.zacc_mps2, "zacc") * imu_.delta_velocity_dt};
-        imu_.delta_angle = Vector3f{
-            finite_float(input.xgyro_rad_s, "xgyro") * imu_.delta_angle_dt,
-            finite_float(input.ygyro_rad_s, "ygyro") * imu_.delta_angle_dt,
-            finite_float(input.zgyro_rad_s, "zgyro") * imu_.delta_angle_dt};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        const auto acceleration = ap_rotate_sensor_to_body(sensor_model_v2_,
+            {input.xacc_mps2, input.yacc_mps2, input.zacc_mps2});
+        const auto angular_rate = ap_rotate_sensor_to_body(sensor_model_v2_,
+            {input.xgyro_rad_s, input.ygyro_rad_s, input.zgyro_rad_s});
+#else
+        const std::array<double, 3> acceleration{input.xacc_mps2, input.yacc_mps2, input.zacc_mps2};
+        const std::array<double, 3> angular_rate{input.xgyro_rad_s, input.ygyro_rad_s, input.zgyro_rad_s};
+#endif
+        imu_.delta_velocity = Vector3f{finite_float(acceleration[0], "xacc") * imu_.delta_velocity_dt,
+            finite_float(acceleration[1], "yacc") * imu_.delta_velocity_dt,
+            finite_float(acceleration[2], "zacc") * imu_.delta_velocity_dt};
+        imu_.delta_angle = Vector3f{finite_float(angular_rate[0], "xgyro") * imu_.delta_angle_dt,
+            finite_float(angular_rate[1], "ygyro") * imu_.delta_angle_dt,
+            finite_float(angular_rate[2], "zgyro") * imu_.delta_angle_dt};
 
         current_time_usec_ = input.time_usec;
         last_imu_time_usec_ = input.time_usec;
@@ -183,10 +193,15 @@ public:
         mag_.last_update_usec = static_cast<std::uint32_t>(input.time_usec);
         mag_.offsets.zero();
         // AP_DAL_Compass exposes the field in milligauss.
-        mag_.field = Vector3f{
-            finite_float(input.xmag_gauss * 1000.0, "xmag"),
-            finite_float(input.ymag_gauss * 1000.0, "ymag"),
-            finite_float(input.zmag_gauss * 1000.0, "zmag")};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        const auto mag_gauss = ap_correct_mag_sensor_to_body(sensor_model_v2_,
+            {input.xmag_gauss, input.ymag_gauss, input.zmag_gauss});
+#else
+        const std::array<double, 3> mag_gauss{input.xmag_gauss, input.ymag_gauss, input.zmag_gauss};
+#endif
+        mag_.field = Vector3f{finite_float(mag_gauss[0] * 1000.0, "xmag"),
+            finite_float(mag_gauss[1] * 1000.0, "ymag"),
+            finite_float(mag_gauss[2] * 1000.0, "zmag")};
         mag_.use_for_yaw = true;
         mag_.healthy = true;
         mag_.have_scale_factor = false;
@@ -224,7 +239,13 @@ public:
         gps_header_.primary_sensor = 0;
 
         gps_info_.instance = 0;
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        gps_info_.antenna_offset = Vector3f{static_cast<float>(sensor_model_v2_.gps_position_body_m[0]),
+            static_cast<float>(sensor_model_v2_.gps_position_body_m[1]),
+            static_cast<float>(sensor_model_v2_.gps_position_body_m[2])};
+#else
         gps_info_.antenna_offset.zero();
+#endif
         gps_info_.lag_sec = static_cast<float>(gps_lag_sec_);
         gps_info_.have_vertical_velocity = true;
         gps_info_.horizontal_accuracy_returncode = true;
@@ -488,6 +509,9 @@ public:
     std::uint64_t in_air_since_usec_{0};
     bool at_rest_{true};
     std::ofstream debug_csv_{};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    ArdupilotSensorModelV2Config sensor_model_v2_{};
+#endif
 };
 
 ApEkf3Backend::ApEkf3Backend()
@@ -518,6 +542,16 @@ void ApEkf3Backend::set_gps_lag_sec(double lag_sec)
     impl_->gps_lag_sec_ = lag_sec;
 }
 void ApEkf3Backend::set_debug_csv_path(const std::string& path) { impl_->set_debug_csv_path(path); }
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+void ApEkf3Backend::set_sensor_model_v2_config(const ArdupilotSensorModelV2Config& config)
+{
+    impl_->sensor_model_v2_ = config;
+    // [SEN-COM-350] NavEKF3 reads INS_POS1 through AP_DAL_InertialSensor.
+    impl_->dal_.ins().set_imu_pos_offset(Vector3f{static_cast<float>(config.imu_position_body_m[0]),
+        static_cast<float>(config.imu_position_body_m[1]),
+        static_cast<float>(config.imu_position_body_m[2])});
+}
+#endif
 void ApEkf3Backend::push_imu(const EkfImuInput& input, double dt_sec) { impl_->push_imu(input, dt_sec); }
 void ApEkf3Backend::push_mag(const EkfMagInput& input) { impl_->push_mag(input); }
 void ApEkf3Backend::push_baro(const EkfBaroInput& input) { impl_->push_baro(input); }

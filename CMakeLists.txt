@@ -8,6 +8,12 @@ if(HAKO_ENABLE_GOTO_SPEED_LIMIT)
     add_compile_definitions(HAKO_ENABLE_GOTO_SPEED_LIMIT)
 endif()
 
+option(HAKO_ENABLE_SENSOR_MODEL_V2
+    "Apply ArduPilot sensor orientation, lever arms, and compass calibration" OFF)
+if(HAKO_ENABLE_SENSOR_MODEL_V2)
+    add_compile_definitions(HAKO_ENABLE_SENSOR_MODEL_V2)
+endif()
+
 # ArduPilot's plugin always implements the flight-phase contract.  The public
 # headers, static library, plugin and tests must use the same ABI revision.
 add_compile_definitions(HAKO_ENABLE_FLIGHT_PHASE)
@@ -45,6 +51,7 @@ add_library(hakoniwa_drone_control_adapter_ap STATIC
     src/ap_horizontal_position_control_backend.cpp
     src/ap_position_control_3d_backend.cpp
     src/ap_rate_control_backend.cpp
+    src/ap_sensor_model_v2.cpp
     src/ardupilot_controller_config_loader.cpp
     src/ardupilot_runtime_shim.cpp
     "${ARDUPILOT_ROOT}/libraries/AC_PID/AC_P_1D.cpp"
@@ -86,10 +93,20 @@ endif()
 target_compile_definitions(hakoniwa_drone_control_adapter_ap PRIVATE
     ARDUPILOT_BUILD
     AP_FILTER_NUM_FILTERS=0
-    AP_INLINE_VECTOR_OPS
     __AP_LINE__=__LINE__
     CONFIG_HAL_BOARD=HAL_BOARD_SITL
     CONFIG_HAL_BOARD_SUBTYPE=HAL_BOARD_SUBTYPE_NONE)
+if(HAKO_ENABLE_SENSOR_MODEL_V2)
+    # Custom 1 is built from its configured Euler angles below; standard
+    # Vector3::rotate must not pull in ArduPilot's AP_Param singleton graph.
+    target_compile_definitions(hakoniwa_drone_control_adapter_ap PRIVATE AP_CUSTOMROTATIONS_ENABLED=0)
+    target_sources(hakoniwa_drone_control_adapter_ap PRIVATE
+        "${ARDUPILOT_ROOT}/libraries/AP_Math/AP_Math.cpp"
+        "${ARDUPILOT_ROOT}/libraries/AP_Math/matrix3.cpp"
+        "${ARDUPILOT_ROOT}/libraries/AP_Math/vector3.cpp")
+else()
+    target_compile_definitions(hakoniwa_drone_control_adapter_ap PRIVATE AP_INLINE_VECTOR_OPS)
+endif()
 
 if(HAKONIWA_AP_ENABLE_EKF3 AND NOT EXISTS "${ARDUPILOT_DAL_LIBRARY}")
     message(FATAL_ERROR
@@ -113,6 +130,12 @@ if(HAKONIWA_AP_ENABLE_EKF3)
         COMMAND "${CMAKE_AR}" d "${ARDUPILOT_DAL_FILTERED_LIBRARY}"
             system.cpp.0.o
         COMMAND_ERROR_IS_FATAL ANY)
+    if(HAKO_ENABLE_SENSOR_MODEL_V2)
+        execute_process(
+            COMMAND "${CMAKE_AR}" d "${ARDUPILOT_DAL_FILTERED_LIBRARY}"
+                AP_Math.cpp.0.o vector3.cpp.0.o matrix3.cpp.0.o
+            COMMAND_ERROR_IS_FATAL ANY)
+    endif()
     add_library(ardupilot_dal STATIC IMPORTED GLOBAL)
     set_target_properties(ardupilot_dal PROPERTIES
         IMPORTED_LOCATION "${ARDUPILOT_DAL_FILTERED_LIBRARY}")
@@ -135,6 +158,10 @@ if(HAKONIWA_AP_ENABLE_EKF3)
         __AP_LINE__=__LINE__
         CONFIG_HAL_BOARD=HAL_BOARD_SITL
         CONFIG_HAL_BOARD_SUBTYPE=HAL_BOARD_SUBTYPE_NONE)
+    if(HAKO_ENABLE_SENSOR_MODEL_V2)
+        target_compile_definitions(hakoniwa_drone_control_adapter_ap_lowpass PRIVATE
+            HAKO_ENABLE_SENSOR_MODEL_V2)
+    endif()
     function(hakoniwa_ap_link_standalone_lowpass target)
         target_link_libraries(${target} PRIVATE
             hakoniwa_drone_control_adapter_ap_lowpass)
@@ -247,6 +274,16 @@ if(BUILD_TESTING)
     add_test(NAME ardupilot_python_tools
         COMMAND ${Python3_EXECUTABLE} -m unittest discover
             -s ${CMAKE_CURRENT_SOURCE_DIR}/test -p test_*.py)
+
+    if(HAKO_ENABLE_SENSOR_MODEL_V2)
+        add_executable(ap_sensor_model_v2_smoke test/ap_sensor_model_v2_smoke.cpp)
+        target_link_libraries(ap_sensor_model_v2_smoke PRIVATE hakoniwa_drone_control_adapter_ap)
+        if(HAKONIWA_AP_ENABLE_EKF3)
+            hakoniwa_ap_link_standalone_lowpass(ap_sensor_model_v2_smoke)
+        endif()
+        add_test(NAME ap_sensor_model_v2_smoke COMMAND ap_sensor_model_v2_smoke
+            ${CMAKE_CURRENT_SOURCE_DIR}/config/ardupilot-controller-config.json)
+    endif()
 
     add_executable(ap_contract_smoke test/ap_contract_smoke.cpp)
     target_link_libraries(ap_contract_smoke PRIVATE hakoniwa_drone_control_adapter_ap)

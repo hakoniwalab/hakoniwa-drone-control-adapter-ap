@@ -4,6 +4,9 @@
 #include <hakoniwa/drone/control_adapter/ekf_adapter.hpp>
 
 #include <memory>
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+#include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
+#endif
 #include <string>
 
 namespace hakoniwa::drone::control_adapter {
@@ -32,6 +35,9 @@ public:
     void set_gps_lag_sec(double lag_sec);
     // Adapter-local diagnostic output; the common IEkfAdapter stays unchanged.
     void set_debug_csv_path(const std::string& path);
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    void set_sensor_model_v2_config(const ArdupilotSensorModelV2Config& config);
+#endif
 
     void push_imu(const EkfImuInput& input, double dt_sec) override;
     void push_mag(const EkfMagInput& input) override;

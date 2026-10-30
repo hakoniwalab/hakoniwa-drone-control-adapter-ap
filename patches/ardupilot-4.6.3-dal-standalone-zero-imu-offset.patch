@@ -2,7 +2,7 @@ diff --git a/libraries/AP_DAL/AP_DAL_InertialSensor.h b/libraries/AP_DAL/AP_DAL_
 index 8d884d1c73..e30d1c10e1 100644
 --- a/libraries/AP_DAL/AP_DAL_InertialSensor.h
 +++ b/libraries/AP_DAL/AP_DAL_InertialSensor.h
-@@ -54,6 +54,13 @@ public:
+@@ -54,8 +54,18 @@ public:
      }
      void handle_message(const log_RISI &msg) {
          _RISI[msg.instance] = msg;
@@ -10,9 +10,22 @@ index 8d884d1c73..e30d1c10e1 100644
 +        // A standalone replay source has no live AP_InertialSensor. The first
 +        // Hakoniwa backend supports a body-centred IMU, so its lever arm is
 +        // explicitly zero instead of pulling in the real sensor runtime.
-+        pos[msg.instance].zero();
++        pos[msg.instance] = standalone_imu_pos_offset();
 +#else
          pos[msg.instance] = AP::ins().get_imu_pos_offset(msg.instance);
 +#endif
          update_filtered(msg.instance);
      }
++#ifdef HAKONIWA_AP_DAL_ZERO_IMU_OFFSET
++    void set_imu_pos_offset(const Vector3f &offset) { standalone_imu_pos_offset() = offset; }
++#endif
+ 
+ private:
+@@ -72,4 +82,7 @@ private:
+     uint8_t _primary_gyro;
+ 
+     void update_filtered(uint8_t i);
++#ifdef HAKONIWA_AP_DAL_ZERO_IMU_OFFSET
++    static Vector3f &standalone_imu_pos_offset() { static Vector3f offset; return offset; }
++#endif
+ };
