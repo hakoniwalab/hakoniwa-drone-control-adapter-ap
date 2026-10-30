@@ -299,6 +299,46 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertFalse(marker["gps_accuracy"]["used_by_ardupilot_sitl"])
         self.assertIn("ArduPilot SITL creates its own GPS", marker["gps_accuracy"]["reason"])
 
+    def test_sensor_model_v2_provenance_is_copied_to_sitl_runtime(self) -> None:
+        provenance = {
+            "ardupilot_sitl_parameters": {
+                "SIM_MAG_RND": 0.5,
+                "SIM_BARO_DRIFT": 0,
+                "SIM_GPS_VERR_X": math.sqrt(3) * 0.1,
+            },
+            "ardupilot_sitl_not_applied": [
+                {"sensor": "mag", "field": "resolutionNT",
+                 "reason": "ArduPilot SITL has no equivalent parameter"},
+            ],
+        }
+        (self.runtime / "sensor-model-v2-provenance.json").write_text(
+            json.dumps(provenance), encoding="utf-8"
+        )
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        tuned["components"]["sensors"]["gyro"].update({
+            "zeroRateOffset": {"fixedDegPerSec": [1, 2, 3]},
+            "sensitivity": {"scaleErrorPct": [1, 2, 3]},
+        })
+        tuned_path.write_text(json.dumps(tuned))
+        self.assertEqual(self.run_setup(self.service), 0)
+        values = (self.out / "sitl.parm").read_text(encoding="utf-8")
+        self.assertEqual(1, values.count("SIM_MAG_RND,"))
+        self.assertIn("SIM_MAG_RND,0.5\n", values)
+        self.assertIn("SIM_BARO_DRIFT,0\n", values)
+        self.assertIn(f"SIM_GPS_VERR_X,{math.sqrt(3) * 0.1:g}\n", values)
+        record = (self.out / "ardupilot-sitl-not-applied.txt").read_text(encoding="utf-8")
+        self.assertIn("mag.resolutionNT: ArduPilot SITL has no equivalent parameter", record)
+        runtime_config = json.loads((self.out / "drone_config/drone_config_0.json").read_text())
+        runtime_gyro = runtime_config["components"]["sensors"]["gyro"]
+        self.assertNotIn("zeroRateOffset", runtime_gyro)
+        self.assertNotIn("sensitivity", runtime_gyro)
+
+    def test_missing_sensor_model_v2_provenance_keeps_legacy_runtime(self) -> None:
+        self.assertEqual(self.run_setup(self.service), 0)
+        self.assertFalse((self.out / "ardupilot-sitl-not-applied.txt").exists())
+        self.assertIn("SIM_MAG_RND,0.173205\n", (self.out / "sitl.parm").read_text())
+
     def test_sensor_conversion_warnings_and_drift_modes(self) -> None:
         tuned_path = self.runtime / "drone_config_0.json"
         tuned = json.loads(tuned_path.read_text())
