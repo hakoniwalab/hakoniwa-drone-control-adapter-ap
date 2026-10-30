@@ -320,6 +320,11 @@ class SetupSitlRuntimeTest(unittest.TestCase):
             "zeroRateOffset": {"fixedDegPerSec": [1, 2, 3]},
             "sensitivity": {"scaleErrorPct": [1, 2, 3]},
         })
+        tuned["components"]["sensors"].setdefault("acc", {}).update({
+            "ardupilotSitlErrorSource": "ardupilot-sitl",
+            "zeroGOffset": {"fixedMg": [20, 0, 0]},
+            "sensitivity": {"scaleErrorPct": [1, 0, 0]},
+        })
         tuned_path.write_text(json.dumps(tuned))
         self.assertEqual(self.run_setup(self.service), 0)
         values = (self.out / "sitl.parm").read_text(encoding="utf-8")
@@ -333,6 +338,9 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         runtime_gyro = runtime_config["components"]["sensors"]["gyro"]
         self.assertNotIn("zeroRateOffset", runtime_gyro)
         self.assertNotIn("sensitivity", runtime_gyro)
+        runtime_acc = runtime_config["components"]["sensors"]["acc"]
+        self.assertNotIn("zeroGOffset", runtime_acc)
+        self.assertNotIn("sensitivity", runtime_acc)
 
     def test_missing_sensor_model_v2_provenance_keeps_legacy_runtime(self) -> None:
         self.assertEqual(self.run_setup(self.service), 0)

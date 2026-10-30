@@ -190,6 +190,19 @@ def remove_service_gyro_replacements(drone_config: dict, enabled: bool) -> list[
     return removed
 
 
+def remove_service_acc_replacements(drone_config: dict, enabled: bool) -> list[str]:
+    """Remove acc errors that SIM_ACC1_* carries when ardupilotSitlErrorSource selects ArduPilot SITL."""
+    acc = drone_config.get("components", {}).get("sensors", {}).get("acc", {})
+    if not enabled or acc.get("ardupilotSitlErrorSource", "hakoniwa") != "ardupilot-sitl":
+        return []
+    removed = []
+    for field in ("zeroGOffset", "sensitivity"):
+        if field in acc:
+            del acc[field]
+            removed.append(field)
+    return removed
+
+
 def sitl_accel_filter_hz(tuned_cutoff_hz: float, sim_step_sec: float) -> float:
     """INS_ACCEL_FILTER for the SITL so its accel filter has the tuned cutoff.
 
@@ -368,6 +381,9 @@ def main() -> int:
     removed_service_gyro_replacements = remove_service_gyro_replacements(
         tuned, bool(provenance_sitl_params)
     )
+    removed_service_acc_replacements = remove_service_acc_replacements(
+        tuned, bool(provenance_sitl_params)
+    )
     write_json(config_dir / "drone_config_0.json", tuned)
 
     # 4. Launch scripts
@@ -415,6 +431,7 @@ cd {out}
         "aircraft_service_gyro_drift_reason":
             "ArduPilot SITL applies SIM_DRIFT_*; service-side gyro drift would apply it twice",
         "aircraft_service_gyro_replacements_removed": removed_service_gyro_replacements,
+        "aircraft_service_acc_replacements_removed": removed_service_acc_replacements,
         "sensor_parameter_conversions": {
             name: {"value": value, "source": {
                 "SIM_GPS_LAG_MS": "components.sensors.gps.delayMsec",
