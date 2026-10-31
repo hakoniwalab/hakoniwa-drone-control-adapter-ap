@@ -183,6 +183,11 @@ def main() -> int:
     # Altitude above the takeoff point, as ArduPilot holds it above home: a target of 5 m in the
     # tuning is the same height as a 5 m takeoff in SITL (the world frame adds the vehicle's rest height).
     controller["ekf"] = {"enable": True, **EKF_INTERVALS_USEC, "altitudeReference": "takeoff"}
+    if args.sensor_model_v2:
+        # [SEN-COM-440] ArduPilot integrates its 1 kHz IMU samples over each EKF3 step (AP_InertialSensor
+        # backend); the mean over the interval times the interval is that sum (coning correction aside).
+        controller["ekf"]["imuAverage"] = True
+        changes.append("controller.ekf.imuAverage true (ArduPilot integrates the IMU samples of each EKF3 step)")
     changes.append("controller: adapter-plugin (ArduPilot), EKF at the SITL sensor periods, altitude from the takeoff point")
     sensors = drone.setdefault("components", {}).setdefault("sensors", {})
     location = drone["simulation"]["location"]
