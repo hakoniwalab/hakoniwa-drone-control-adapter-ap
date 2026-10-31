@@ -177,6 +177,32 @@ def remove_service_gyro_drift(drone_config: dict) -> bool:
     return False
 
 
+def remove_service_gyro_replacements(drone_config: dict, enabled: bool) -> list[str]:
+    """Remove gyro errors represented by Sensor Model v2 SIM_GYR1 parameters."""
+    if not enabled:
+        return []
+    gyro = drone_config.get("components", {}).get("sensors", {}).get("gyro", {})
+    removed = []
+    for field in ("zeroRateOffset", "sensitivity"):
+        if field in gyro:
+            del gyro[field]
+            removed.append(field)
+    return removed
+
+
+def remove_service_acc_replacements(drone_config: dict, enabled: bool) -> list[str]:
+    """Remove acc errors that SIM_ACC1_* carries when ardupilotSitlErrorSource selects ArduPilot SITL."""
+    acc = drone_config.get("components", {}).get("sensors", {}).get("acc", {})
+    if not enabled or acc.get("ardupilotSitlErrorSource", "hakoniwa") != "ardupilot-sitl":
+        return []
+    removed = []
+    for field in ("zeroGOffset", "sensitivity"):
+        if field in acc:
+            del acc[field]
+            removed.append(field)
+    return removed
+
+
 def sitl_accel_filter_hz(tuned_cutoff_hz: float, sim_step_sec: float) -> float:
     """INS_ACCEL_FILTER for the SITL so its accel filter has the tuned cutoff.
 
@@ -249,6 +275,15 @@ def main() -> int:
         print(f"WARNING: configured magnetic declination {configured_declination:g} deg differs from "
               f"ArduPilot's table {field['declination_deg']:g} deg", file=sys.stderr)
     sensor_params, sensor_warnings = ardupilot_sensor_parameters(tuned)
+    mount_provenance_path = runtime / "drone_config" / "sensor-model-v2-provenance.json"
+    mount_params = {}
+    provenance_sitl_params = {}
+    provenance_not_applied = []
+    if mount_provenance_path.is_file():
+        mount_provenance = load_json(mount_provenance_path)
+        mount_params = mount_provenance.get("ardupilot_parameters", {})
+        provenance_sitl_params = mount_provenance.get("ardupilot_sitl_parameters", {})
+        provenance_not_applied = mount_provenance.get("ardupilot_sitl_not_applied", [])
     update_periods = {
         name: sensor_update_period_msec(tuned, name)
         for name in ("acc", "gyro", "baro", "mag", "gps")
@@ -304,8 +339,24 @@ def main() -> int:
         f"# this value to get it (tools/setup_sitl_runtime.py, sitl_accel_filter_hz)\n"
         f"INS_ACCEL_FILTER,{sitl_accel_filter_hz(tuned_accel_filter_hz, sim_step_sec):g}\n"
         "# sensor delays of the vehicle (drone_config components.sensors.*.delayMsec)\n"
-        + "".join(f"{name},{value:g}\n" for name, value in sensor_params.items()),
+        + "".join(f"{name},{value:g}\n" for name, value in sensor_params.items()
+                  if name not in provenance_sitl_params)
+        # [SEN-COM-300] Sensor Model v2 SITL conversions supersede legacy runtime conversions.
+        + "# Sensor Model v2 ArduPilot SITL parameters from tuning provenance\n"
+        + "".join(f"{name},{value:g}\n" for name, value in provenance_sitl_params.items())
+        # [SEN-COM-300] Use the exact mount/calibration values recorded when tuning began.
+        + "# Sensor Model v2 mount and compass calibration from tuning provenance\n"
+        + "".join(f"{name},{value:g}\n" for name, value in mount_params.items()),
         encoding="utf-8")
+    if provenance_not_applied:
+        (out / "ardupilot-sitl-not-applied.txt").write_text(
+            "# Sensor Model v2 fields not applied by ArduPilot SITL\n"
+            + "".join(
+                f"{item['sensor']}.{item['field']}: {item['reason']}\n"
+                for item in provenance_not_applied
+            ),
+            encoding="utf-8",
+        )
 
     # 3. The vehicle for the aircraft service: the tuning's 3 ms vehicle, the SITL section of the reference
     tuned_model = runtime / "drone_config" / Path(tuned["components"]["droneDynamics"]["mujoco"]["modelPath"]).name
@@ -327,6 +378,12 @@ def main() -> int:
     removed_service_sensor_delays = remove_service_sensor_delays(tuned)
     original_gyro_drift = tuned.get("components", {}).get("sensors", {}).get("gyro", {}).get("drift")
     removed_service_gyro_drift = remove_service_gyro_drift(tuned)
+    removed_service_gyro_replacements = remove_service_gyro_replacements(
+        tuned, bool(provenance_sitl_params)
+    )
+    removed_service_acc_replacements = remove_service_acc_replacements(
+        tuned, bool(provenance_sitl_params)
+    )
     write_json(config_dir / "drone_config_0.json", tuned)
 
     # 4. Launch scripts
@@ -373,6 +430,8 @@ cd {out}
         "aircraft_service_gyro_drift_removed_value": original_gyro_drift,
         "aircraft_service_gyro_drift_reason":
             "ArduPilot SITL applies SIM_DRIFT_*; service-side gyro drift would apply it twice",
+        "aircraft_service_gyro_replacements_removed": removed_service_gyro_replacements,
+        "aircraft_service_acc_replacements_removed": removed_service_acc_replacements,
         "sensor_parameter_conversions": {
             name: {"value": value, "source": {
                 "SIM_GPS_LAG_MS": "components.sensors.gps.delayMsec",
@@ -408,6 +467,8 @@ cd {out}
             for name, value in update_periods.items()
         },
         "warnings": sensor_warnings,
+        "sensor_model_v2_sitl_parameters": provenance_sitl_params,
+        "sensor_model_v2_not_applied": provenance_not_applied,
     })
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():

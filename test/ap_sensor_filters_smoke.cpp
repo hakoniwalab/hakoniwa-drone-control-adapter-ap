@@ -71,17 +71,21 @@ std::string read_file(const char* path)
     return text.str();
 }
 
-std::string filtered_config(const char* source_path)
+std::string config_with(const char* source_path, const std::string& fields, const std::string& path)
 {
     std::string text = read_file(source_path);
     const std::string marker = "\"parameters\": {";
     const auto position = text.find(marker);
     require(position != std::string::npos, "config parameters object");
-    text.insert(position + marker.size(),
-        "\n    \"INS_GYRO_FILTER\": 5, \"INS_ACCEL_FILTER\": 5,");
-    const std::string path = "/tmp/hako-ap-sensor-filter-test.json";
+    text.insert(position + marker.size(), "\n    " + fields + ",");
     std::ofstream(path) << text;
     return path;
+}
+
+std::string filtered_config(const char* source_path)
+{
+    return config_with(source_path, "\"INS_GYRO_FILTER\": 5, \"INS_ACCEL_FILTER\": 5",
+        "/tmp/hako-ap-sensor-filter-test.json");
 }
 
 void loader_defaults_filters_to_zero(const char* config_path)
@@ -178,6 +182,47 @@ void plugin_filters_reduce_high_frequency_inputs(const char* library_path, const
     loaded.api->destroy_context(filtered_context);
 }
 
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+// [SEN-COM-350] Both plugin rate paths turn the sensor-axis gyro to the body axes from AHRS_ORIENTATION.
+void plugin_rate_control_uses_board_orientation(const char* library_path, const char* config_path)
+{
+    auto loaded = load_plugin(library_path);
+    char error[256]{};
+    for (const std::string filter : {"\"INS_GYRO_FILTER\": 0", "\"INS_GYRO_FILTER\": 20"}) {
+        const auto plain_path = config_with(config_path, filter, "/tmp/hako-ap-v2-rate-plain.json");
+        void* plain_context = loaded.api->create_context(plain_path.c_str(), error, sizeof(error));
+        require(plain_context != nullptr, error);
+        const auto rotated_path = config_with(config_path, filter + ", \"AHRS_ORIENTATION\": 2",
+            "/tmp/hako-ap-v2-rate-rotated.json");
+        void* rotated_context = loaded.api->create_context(rotated_path.c_str(), error, sizeof(error));
+        require(rotated_context != nullptr, error);
+        auto* plain = backend<adapter::IRateControlBackend>(loaded, plain_context, plugin::BackendKind::RateControl);
+        auto* rotated = backend<adapter::IRateControlBackend>(loaded, rotated_context, plugin::BackendKind::RateControl);
+        adapter::RateControlInput body{};
+        body.dt_sec = 1.0 / 400.0;
+        adapter::RateControlInput sensor = body;
+        double difference = 0.0, magnitude = 0.0;
+        for (int i = 0; i < 50; ++i) {
+            // ROTATION_YAW_90: sensor (0, -w, 0) is body (w, 0, 0).
+            const double w = 0.5 * std::sin(0.1 * i);
+            body.rate.p = w;
+            sensor.rate.q = -w;
+            const auto expected = plain->run(body);
+            const auto actual = rotated->run(sensor);
+            difference += std::abs(expected.x - actual.x) + std::abs(expected.y - actual.y)
+                + std::abs(expected.z - actual.z);
+            magnitude += std::abs(expected.x);
+        }
+        require(magnitude > 0.0, "rate control produced no roll torque");
+        require(difference < 1.0e-9 * magnitude, "rate control did not use AHRS_ORIENTATION");
+        loaded.api->destroy_backend(plugin::BackendKind::RateControl, plain);
+        loaded.api->destroy_backend(plugin::BackendKind::RateControl, rotated);
+        loaded.api->destroy_context(plain_context);
+        loaded.api->destroy_context(rotated_context);
+    }
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -186,5 +231,8 @@ int main(int argc, char** argv)
     biquad_matches_ardupilot_response();
     loader_defaults_filters_to_zero(argv[2]);
     plugin_filters_reduce_high_frequency_inputs(argv[1], argv[2]);
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    plugin_rate_control_uses_board_orientation(argv[1], argv[2]);
+#endif
     std::cout << "ap_sensor_filters_smoke: PASS\n";
 }

@@ -19,9 +19,11 @@ inputs of a Drone PRO `plugin` tuning profile:
 
 Sensor characteristics remain those of the input vehicle.  The optional
 --sensor-preset ardupilot-sitl-default explicitly installs the historical ArduPilot defaults for
-mag/baro noise, gyro drift, and a missing GPS delay.  The barometer delay is always 60 ms because
-the plugin's NavEKF3 keeps EK3_HGT_DELAY at its default.  The tuning, export and SITL runtime take
-the values from drone_config_0.json, so the EKF's allowance matches the configured delay.
+mag/baro noise, gyro drift, and a missing GPS delay.  This tool keeps the barometer delay at 60 ms,
+NavEKF3's EK3_HGT_DELAY default, which is all a plugin built without HAKO_ENABLE_SENSOR_MODEL_V2 accepts
+(a sensor model v2 plugin also accepts other EK3_HGT_DELAY values and EK3_ALT_M_NSE, but this tool does
+not write them yet).  The tuning, export and SITL runtime take the values from drone_config_0.json, so the
+EKF's allowance matches the configured delay.
 
 Usage:
   python tuning/prepare_ardupilot_inputs.py --pro-root ../hakoniwa-drone-pro \\

@@ -1,8 +1,8 @@
 diff --git a/libraries/AP_DAL/AP_DAL_InertialSensor.h b/libraries/AP_DAL/AP_DAL_InertialSensor.h
-index 8d884d1c73..e30d1c10e1 100644
+index 44361e99bd..f8ad973d6a 100644
 --- a/libraries/AP_DAL/AP_DAL_InertialSensor.h
 +++ b/libraries/AP_DAL/AP_DAL_InertialSensor.h
-@@ -54,6 +54,13 @@ public:
+@@ -54,9 +54,19 @@ public:
      }
      void handle_message(const log_RISI &msg) {
          _RISI[msg.instance] = msg;
@@ -10,9 +10,39 @@ index 8d884d1c73..e30d1c10e1 100644
 +        // A standalone replay source has no live AP_InertialSensor. The first
 +        // Hakoniwa backend supports a body-centred IMU, so its lever arm is
 +        // explicitly zero instead of pulling in the real sensor runtime.
-+        pos[msg.instance].zero();
++        pos[msg.instance] = standalone_imu_pos_offset();
 +#else
          pos[msg.instance] = AP::ins().get_imu_pos_offset(msg.instance);
 +#endif
          update_filtered(msg.instance);
      }
++#ifdef HAKONIWA_AP_DAL_ZERO_IMU_OFFSET
++    void set_imu_pos_offset(const Vector3f &offset) { standalone_imu_pos_offset() = offset; }
++#endif
+ 
+ private:
+     struct log_RISH _RISH;
+@@ -72,4 +82,7 @@ private:
+     uint8_t _primary_gyro;
+ 
+     void update_filtered(uint8_t i);
++#ifdef HAKONIWA_AP_DAL_ZERO_IMU_OFFSET
++    static Vector3f &standalone_imu_pos_offset() { static Vector3f offset; return offset; }
++#endif
+ };
+diff --git a/libraries/AP_NavEKF3/AP_NavEKF3.h b/libraries/AP_NavEKF3/AP_NavEKF3.h
+index 415d7424a4..8f432b6baa 100644
+--- a/libraries/AP_NavEKF3/AP_NavEKF3.h
++++ b/libraries/AP_NavEKF3/AP_NavEKF3.h
+@@ -313,6 +313,11 @@ public:
+ 
+     // set and save the _baroAltNoise parameter
+     void set_baro_alt_noise(float noise) { _baroAltNoise.set_and_save(noise); };
++#ifdef HAKONIWA_AP_DAL_ZERO_IMU_OFFSET
++    // A standalone host has no parameter storage; it sets EK3_ALT_M_NSE and EK3_HGT_DELAY before InitialiseFilter().
++    void set_standalone_baro_alt_noise(float noise_m) { _baroAltNoise.set(noise_m); }
++    void set_standalone_hgt_delay_ms(int16_t delay_ms) { _hgtDelay_ms.set(delay_ms); }
++#endif
+ 
+     // allow the enable flag to be set by Replay
+     void set_enable(bool enable) { _enable.set_enable(enable); }

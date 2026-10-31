@@ -201,7 +201,11 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
             if (config.sensor_filter.gyro_cutoff_hz > 0.0) {
                 return static_cast<adapter::IRateControlBackend*>(new filters::FilteredRateControl(config));
             }
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+            return static_cast<adapter::IRateControlBackend*>(new filters::RotatedRateControl(config));
+#else
             return static_cast<adapter::IRateControlBackend*>(new adapter::ApRateControlBackend(config.rate_control));
+#endif
         case BackendKind::AttitudeControl:
             return static_cast<adapter::IAttitudeControlBackend*>(
                 new adapter::ApAttitudeControlBackend(config.attitude_control));
@@ -231,6 +235,10 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
             auto* ekf = new adapter::ApEkf3Backend();
             ekf->set_gps_lag_sec(config.ekf.gps_delay_ms * 1.0e-3);
             ekf->set_debug_csv_path(config.ekf.debug_csv);
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+            ekf->set_sensor_model_v2_config(config.sensor_model_v2);
+            ekf->set_baro_expectations(config.ekf.baro_alt_noise_m, config.ekf.hgt_delay_ms);
+#endif
             if (argument != nullptr) {
                 ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));
             }
