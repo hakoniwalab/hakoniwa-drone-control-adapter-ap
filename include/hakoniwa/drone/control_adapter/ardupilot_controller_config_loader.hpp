@@ -29,6 +29,8 @@ struct ArdupilotSensorFilterConfig {
 struct ArdupilotEkfConfig {
     double gps_delay_ms{0.0};
     double hgt_delay_ms{60.0};
+    // EK3_ALT_M_NSE (m); 0 keeps NavEKF3's default. Read with the sensor model v2 switch only.
+    double baro_alt_noise_m{0.0};
     std::string debug_csv{};
 };
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2

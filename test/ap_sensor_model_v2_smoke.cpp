@@ -64,7 +64,18 @@ int main(int argc, char** argv)
     close(v2.mag_offset_milligauss, {-30.0, 15.0, -8.0}, "generated compass offsets were not loaded");
     close(v2.mag_diagonal, {0.8, 1.25, 2.0}, "generated compass diagonal was not loaded");
     close(v2.mag_offdiagonal, {0.0, 0.0, 0.0}, "generated compass off-diagonal was not loaded");
+    // [SEN-BAR-320] The barometer expectations are loaded within ArduPilot's @Range.
+    const auto baro = ArdupilotControllerConfigLoader{}.load_from_text(with(base,
+        R"("EK3_HGT_DELAY": 50, "EK3_ALT_M_NSE": 0.5)"));
+    require(baro.ekf.hgt_delay_ms == 50.0 && baro.ekf.baro_alt_noise_m == 0.5, "baro expectations were not loaded");
+    for (const char* invalid : {R"("EK3_HGT_DELAY": 251)", R"("EK3_HGT_DELAY": 50.5)", R"("EK3_ALT_M_NSE": 0.05)"}) {
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(with(base, invalid)); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "an out-of-range barometer expectation was accepted");
+    }
     const auto defaults = ArdupilotControllerConfigLoader{}.load_from_text(base);
+    require(defaults.ekf.hgt_delay_ms == 60.0 && defaults.ekf.baro_alt_noise_m == 0.0, "baro defaults changed");
     close(ap_rotate_sensor_to_body(defaults.sensor_model_v2, {1, 2, 3}), {1, 2, 3}, "defaults changed value");
     bool rejected = false;
     try { ArdupilotControllerConfigLoader{}.load_from_text(with(base, R"("AHRS_ORIENTATION":99)")); }

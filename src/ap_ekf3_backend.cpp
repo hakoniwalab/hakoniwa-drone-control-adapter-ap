@@ -93,12 +93,23 @@ public:
     {
     }
 
+    void apply_frontend_parameters()
+    {
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        if (baro_alt_noise_m_ > 0.0) {
+            ekf_->set_standalone_baro_alt_noise(static_cast<float>(baro_alt_noise_m_));
+        }
+        ekf_->set_standalone_hgt_delay_ms(static_cast<int16_t>(hgt_delay_ms_));
+#endif
+    }
+
     void reset()
     {
         // The DAL singleton remains alive, but NavEKF3 owns and releases its
         // cores. Recreate the frontend so service-level reset has the same
         // observable state as a fresh adapter instance.
         ekf_ = std::make_unique<NavEKF3>();
+        apply_frontend_parameters();
         initialised_ = false;
         state_ = {};
         current_time_usec_ = 0;
@@ -511,6 +522,8 @@ public:
     std::ofstream debug_csv_{};
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
     ArdupilotSensorModelV2Config sensor_model_v2_{};
+    double baro_alt_noise_m_{0.0};
+    double hgt_delay_ms_{60.0};
 #endif
 };
 
@@ -550,6 +563,12 @@ void ApEkf3Backend::set_sensor_model_v2_config(const ArdupilotSensorModelV2Confi
     impl_->dal_.ins().set_imu_pos_offset(Vector3f{static_cast<float>(config.imu_position_body_m[0]),
         static_cast<float>(config.imu_position_body_m[1]),
         static_cast<float>(config.imu_position_body_m[2])});
+}
+void ApEkf3Backend::set_baro_expectations(double alt_noise_m, double hgt_delay_ms)
+{
+    impl_->baro_alt_noise_m_ = alt_noise_m;
+    impl_->hgt_delay_ms_ = hgt_delay_ms;
+    impl_->apply_frontend_parameters();
 }
 #endif
 void ApEkf3Backend::push_imu(const EkfImuInput& input, double dt_sec) { impl_->push_imu(input, dt_sec); }

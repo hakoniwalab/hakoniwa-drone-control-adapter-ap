@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include "hakoniwa/drone/control_adapter/ardupilot_controller_config_loader.hpp"
 #include <fstream>
@@ -114,8 +115,17 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     c.ekf.gps_delay_ms=optional_number(s,"GPS1_DELAY_MS",0.0); c.ekf.hgt_delay_ms=optional_number(s,"EK3_HGT_DELAY",60.0);
     c.ekf.debug_csv=optional_string(s,"ekf_debug_csv");
     if(!std::isfinite(c.ekf.gps_delay_ms)||c.ekf.gps_delay_ms<0||c.ekf.gps_delay_ms>250)throw std::invalid_argument("GPS1_DELAY_MS must be 0..250 (NavEKF3 limit)");
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    // [SEN-BAR-320] The plugin sets EK3_HGT_DELAY and EK3_ALT_M_NSE on its NavEKF3 (ArduPilot @Range 0..250 ms, 0.1..100 m).
+    if(!std::isfinite(c.ekf.hgt_delay_ms)||c.ekf.hgt_delay_ms<0||c.ekf.hgt_delay_ms>250||std::trunc(c.ekf.hgt_delay_ms)!=c.ekf.hgt_delay_ms)
+        throw std::invalid_argument("EK3_HGT_DELAY must be an integer 0..250 ms");
+    const double alt_noise=optional_number(s,"EK3_ALT_M_NSE",std::numeric_limits<double>::quiet_NaN());
+    if(!std::isnan(alt_noise)&&(alt_noise<0.1||alt_noise>100))throw std::invalid_argument("EK3_ALT_M_NSE must be 0.1..100 m");
+    c.ekf.baro_alt_noise_m=std::isnan(alt_noise)?0.0:alt_noise;
+#else
     // NavEKF3 inside the plugin runs with its default parameters; its height delay cannot be changed.
     if(c.ekf.hgt_delay_ms!=60.0)throw std::invalid_argument("EK3_HGT_DELAY must be 60 (the plugin's NavEKF3 uses the default); set the barometer delay to 60 ms instead");
+#endif
     const double hover=number(s,"MOT_THST_HOVER"); c.altitude_control.hover_thrust=hover;
     c.attitude_control.angle_roll_p=number(s,"ATC_ANG_RLL_P"); c.attitude_control.angle_pitch_p=number(s,"ATC_ANG_PIT_P"); c.attitude_control.angle_yaw_p=number(s,"ATC_ANG_YAW_P");
     // ATC_ACCEL_*_MAX (centidegrees/s^2, ArduPilot defaults AC_ATTITUDE_CONTROL_ACCEL_RP/Y_MAX_DEFAULT_CDSS): the

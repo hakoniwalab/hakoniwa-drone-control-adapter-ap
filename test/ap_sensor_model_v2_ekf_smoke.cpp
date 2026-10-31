@@ -74,6 +74,33 @@ EkfEstimatedState run_at_rest(const ArdupilotSensorModelV2Config& mount, bool up
     return ekf.get_estimated_state();
 }
 
+// [SEN-BAR-320] A 2 m barometer step at rest: the height estimate follows faster when EK3_ALT_M_NSE is small.
+double height_change_after_baro_step_m(double alt_noise_m)
+{
+    ApEkf3Backend ekf;
+    ekf.set_debug_csv_path("");
+    ekf.set_gps_lag_sec(0.0);
+    ekf.set_baro_expectations(alt_noise_m, 60.0);
+    EkfAdapterConfig config{};
+    config.mag_declination_deg = 0.0;
+    ekf.set_config(config);
+    ekf.set_armed_status(false);
+    ekf.set_vehicle_at_rest(true);
+    ekf.set_in_air_status(false);
+    constexpr double dt = 0.0025;
+    constexpr std::uint64_t dt_usec = 2500;
+    double before = 0.0;
+    for (std::uint64_t step = 1; step <= 24400; ++step) {
+        const std::uint64_t time_usec = step * dt_usec;
+        ekf.push_imu(EkfImuInput{time_usec, 0.0, 0.0, -9.80665, 0.0, 0.0, 0.0}, dt);
+        if (step % 8 == 0) { ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43}); }
+        if (step % 20 == 0) { ekf.push_baro(EkfBaroInput{time_usec, step > 24000 ? 2.0 : 0.0}); }
+        if (step == 24000) { before = ekf.get_estimated_state().position_local_ned_m[2]; }
+        ekf.update();
+    }
+    return before - ekf.get_estimated_state().position_local_ned_m[2];
+}
+
 double tilt_deg(const EkfEstimatedState& state)
 {
     const auto& q = state.attitude_quaternion_wxyz;
@@ -134,6 +161,10 @@ int main()
     if (speed_with_offset > 0.1 || speed_without_offset < 0.3) { return fail("INS_POS1 did not reach EKF"); }
     if (std::abs(yaw_deg(calibrated) - yaw_deg(baseline)) > 0.5) { return fail("COMPASS_OFS did not reach EKF"); }
     if (std::abs(yaw_deg(uncalibrated) - yaw_deg(baseline)) < 1.5) { return fail("the compass bias case is too weak"); }
+    const double trusting = height_change_after_baro_step_m(0.5);
+    const double doubting = height_change_after_baro_step_m(5.0);
+    std::cout << "1 s after a 2 m baro step: EK3_ALT_M_NSE 0.5 -> " << trusting << " m, 5 -> " << doubting << " m\n";
+    if (!(trusting > 2.0 * doubting && trusting > 0.2)) { return fail("EK3_ALT_M_NSE did not reach EKF"); }
     std::cout << "ap_sensor_model_v2_ekf_smoke: PASS\n";
     return EXIT_SUCCESS;
 }
