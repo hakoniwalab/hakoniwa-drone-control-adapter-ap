@@ -39,6 +39,9 @@ public:
     void set_sensor_model_v2_config(const ArdupilotSensorModelV2Config& config);
     // [SEN-BAR-320] EK3_ALT_M_NSE (m; 0 keeps NavEKF3's default) and EK3_HGT_DELAY (ms) for the vehicle's barometer.
     void set_baro_expectations(double alt_noise_m, double hgt_delay_ms);
+    // [SEN-BAR-326] Barometer as ArduCopter reads it: the latest pressure every 1/update_hz, the ground pressure
+    // the mean of `samples` updates after `warmup_updates` updates (AP_Baro::calibrate()).
+    void set_baro_processing(double update_hz, int warmup_updates, int samples);
 #endif
 
     void push_imu(const EkfImuInput& input, double dt_sec) override;

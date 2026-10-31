@@ -80,6 +80,62 @@ int main(int argc, char** argv)
         catch (const std::invalid_argument&) { refused = true; }
         require(refused, "an out-of-range barometer expectation was accepted");
     }
+    // [SEN-BAR-326] How ArduCopter reads the barometer comes from runtime; each key is required and checked.
+    const auto reading = ArdupilotControllerConfigLoader{}.load_from_text(base);
+    require(reading.ekf.baro_update_hz == 10.0 && reading.ekf.baro_calibration_warmup_updates == 10
+        && reading.ekf.baro_calibration_samples == 5, "the barometer reading was not loaded");
+    for (const char* key : {"baro_update_hz", "baro_calibration_warmup_updates", "baro_calibration_samples"}) {
+        const auto at = base.find(std::string("\"") + key + "\"");
+        require(at != std::string::npos, "the fixture lacks a barometer reading key");
+        const auto renamed = base.substr(0, at + 1) + "x_" + base.substr(at + 1);
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(renamed); }
+        catch (const std::exception&) { refused = true; }
+        require(refused, "a missing barometer reading key was accepted");
+    }
+    for (const char* invalid : {R"("baro_update_hz": 0)", R"("baro_calibration_warmup_updates": 1.5)",
+             R"("baro_calibration_samples": 0)"}) {
+        const std::string key = std::string(invalid).substr(0, std::string(invalid).find(':'));
+        const auto at = base.find(key);
+        const auto end = base.find_first_of(",}\n", at);
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(base.substr(0, at) + invalid + base.substr(end)); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "an invalid barometer reading was accepted");
+    }
+    // [SEN-GPS-385] The receiver's own lag (GPS1_DELAY_MS 0) comes from runtime, required, 0..250 ms.
+    require(reading.ekf.gps_receiver_default_lag_ms == 220.0, "the receiver lag was not loaded");
+    {
+        const auto at = base.find("\"gps_receiver_default_lag_ms\"");
+        require(at != std::string::npos, "the fixture lacks the receiver lag");
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(base.substr(0, at + 1) + "x_" + base.substr(at + 1)); }
+        catch (const std::exception&) { refused = true; }
+        require(refused, "a missing receiver lag was accepted");
+        const auto end = base.find_first_of(",}\n", at);
+        refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(base.substr(0, at) + R"("gps_receiver_default_lag_ms": 251)" + base.substr(end)); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "an out-of-range receiver lag was accepted");
+    }
+    // [SEN-GPS-380] T-GPS-U1-380: the fix as AP_GPS reads ArduPilot SITL's UBX-NAV-PVT (toward zero, receiver units).
+    EkfHilGpsInput exact{};
+    exact.lat_deg = 35.68123456789;
+    exact.lon_deg = -139.76712345678;
+    exact.alt_m = 40.12345;
+    exact.vn_mps = 1.23456;
+    exact.ve_mps = -0.98765;
+    exact.vd_mps = -0.0005;
+    exact.eph_m = 0.5004;
+    exact.epv_m = 0.75049;
+    exact.sacc_mps = 0.2509;
+    const auto fix = ap_ublox_pvt_fix(exact);
+    const auto near = [](double actual, double expected) { return std::abs(actual - expected) < 1.0e-6; };
+    require(near(fix.lat_deg, 35.6812345) && near(fix.lon_deg, -139.7671234), "lat/lon are not 1e-7 deg toward zero");
+    require(near(fix.alt_m, 40.12), "the altitude is not h_msl (mm) / 10 cm");
+    require(near(fix.vn_mps, 1.234) && near(fix.ve_mps, -0.987) && fix.vd_mps == 0.0, "the velocity is not mm/s toward zero");
+    require(near(fix.eph_m, 0.5) && near(fix.epv_m, 0.75), "the position accuracy is not mm");
+    require(near(fix.sacc_mps, 0.25), "the speed accuracy is not mm/s (SITL's tenth must not be reproduced)");
     const auto defaults = ArdupilotControllerConfigLoader{}.load_from_text(base);
     require(defaults.ekf.hgt_delay_ms == 60.0 && defaults.ekf.baro_alt_noise_m == 0.0, "baro defaults changed");
     close(ap_rotate_sensor_to_body(defaults.sensor_model_v2, {1, 2, 3}), {1, 2, 3}, "defaults changed value");

@@ -1,4 +1,5 @@
 #include <hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp>
+#include "ap_test_baro.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -9,6 +10,7 @@ using namespace hakoniwa::drone::control_adapter;
 int main()
 {
     ApEkf3Backend ekf;
+    test::configure_baro(ekf);
     // Exercise the state that cannot be represented by in_air alone: armed
     // on the ground before the simulated takeoff.
     ekf.set_armed_status(true);
@@ -42,7 +44,7 @@ int main()
             ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43});
         }
         if (step % 20 == 0) {
-            ekf.push_baro(EkfBaroInput{time_usec, 0.0});
+            ekf.push_baro(test::baro_at(time_usec, 0.0));
         }
         if (step % 80 == 0) {
             EkfHilGpsInput gps{};

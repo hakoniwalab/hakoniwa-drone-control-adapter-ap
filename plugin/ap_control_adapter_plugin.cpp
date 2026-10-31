@@ -233,11 +233,19 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
 #ifdef HAKO_AP_PLUGIN_WITH_EKF3
             // NavEKF3 through the DAL replay boundary (ap_ekf3_backend.hpp).
             auto* ekf = new adapter::ApEkf3Backend();
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+            // [SEN-GPS-385] As AP_GPS::get_lag(): GPS1_DELAY_MS 0 means the receiver's own lag.
+            ekf->set_gps_lag_sec((config.ekf.gps_delay_ms > 0.0 ? config.ekf.gps_delay_ms
+                : config.ekf.gps_receiver_default_lag_ms) * 1.0e-3);
+#else
             ekf->set_gps_lag_sec(config.ekf.gps_delay_ms * 1.0e-3);
+#endif
             ekf->set_debug_csv_path(config.ekf.debug_csv);
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
             ekf->set_sensor_model_v2_config(config.sensor_model_v2);
             ekf->set_baro_expectations(config.ekf.baro_alt_noise_m, config.ekf.hgt_delay_ms);
+            ekf->set_baro_processing(config.ekf.baro_update_hz, config.ekf.baro_calibration_warmup_updates,
+                config.ekf.baro_calibration_samples);
 #endif
             if (argument != nullptr) {
                 ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));

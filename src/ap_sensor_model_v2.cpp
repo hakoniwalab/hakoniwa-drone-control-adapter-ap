@@ -4,6 +4,8 @@
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
 #include <AP_Math/AP_Math.h>
 
+#include <cstdint>
+
 namespace hakoniwa::drone::control_adapter {
 std::array<double, 3> ap_rotate_sensor_to_body(
     const ArdupilotSensorModelV2Config& config, const std::array<double, 3>& value)
@@ -47,6 +49,29 @@ std::array<double, 3> ap_correct_mag_sensor_to_body(
     const auto body_milligauss = ap_rotate_sensor_to_body(config, {mag.x, mag.y, mag.z});
     return {body_milligauss[0] * 0.001, body_milligauss[1] * 0.001,
         body_milligauss[2] * 0.001};
+}
+
+EkfHilGpsInput ap_ublox_pvt_fix(const EkfHilGpsInput& input)
+{
+    EkfHilGpsInput out = input;
+    // SITL's speeds are double, its accuracies and altitude float.
+    const auto milli = [](double value) {
+        return static_cast<double>(static_cast<std::int32_t>(1000.0 * value) * 0.001f);
+    };
+    const auto milli_unsigned = [](double value) {
+        return value >= 0.0
+            ? static_cast<double>(static_cast<std::uint32_t>(static_cast<float>(value) * 1000.0f) * 1.0e-3f) : value;
+    };
+    out.lat_deg = static_cast<std::int32_t>(input.lat_deg * 1.0e7) / 1.0e7;
+    out.lon_deg = static_cast<std::int32_t>(input.lon_deg * 1.0e7) / 1.0e7;
+    out.alt_m = (static_cast<std::int32_t>(static_cast<float>(input.alt_m) * 1000.0f) / 10) / 100.0;
+    out.vn_mps = milli(input.vn_mps);
+    out.ve_mps = milli(input.ve_mps);
+    out.vd_mps = milli(input.vd_mps);
+    out.eph_m = milli_unsigned(input.eph_m);
+    out.epv_m = milli_unsigned(input.epv_m);
+    out.sacc_mps = milli_unsigned(input.sacc_mps);
+    return out;
 }
 }
 #endif

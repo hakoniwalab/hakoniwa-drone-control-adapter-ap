@@ -9,6 +9,7 @@
 #include <AP_NavEKF3/AP_NavEKF3.h>
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
 #include "hakoniwa/drone/control_adapter/ap_sensor_model_v2.hpp"
+#include "ap_baro_atmosphere.hpp"
 #endif
 
 #include <algorithm>
@@ -71,6 +72,7 @@ std::int32_t metres_to_centimetres(double value)
     return static_cast<std::int32_t>(std::llround(value * 100.0));
 }
 
+
 float finite_float(double value, const char* field)
 {
     if (!std::isfinite(value)) {
@@ -124,6 +126,14 @@ public:
         have_baro_ = false;
         baro_ground_set_ = false;
         baro_ground_alt_m_ = 0.0;
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        baro_have_latest_ = false;
+        baro_next_update_usec_ = 0;
+        baro_updates_ = 0;
+        baro_ground_sum_pa_ = 0.0;
+        baro_ground_count_ = 0;
+        baro_calibrated_ = false;
+#endif
         have_gps_ = false;
         armed_ = false;
         in_air_ = false;
@@ -227,6 +237,41 @@ public:
         baro_header_.primary = 0;
         baro_header_.num_instances = 1;
         baro_.instance = 0;
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        // [SEN-BAR-326] As ArduCopter: keep the latest pressure (SITL's AP_Baro_SITL copies its most recent sample)
+        // and read it every 1/baro_update_hz (update_altitude). AP_Baro::calibrate() waits warmup updates, then
+        // averages the next samples into the ground pressure; the EKF gets no barometer before that. The height is
+        // ArduPilot's 1976-atmosphere altitude of the pressure minus that of the ground pressure.
+        baro_latest_pressure_pa_ = finite_float(input.pressure_pa, "baro pressure");
+        baro_have_latest_ = true;
+        const auto period_usec = static_cast<std::uint64_t>(1e6 / baro_update_hz_);
+        if (input.time_usec < baro_next_update_usec_) {
+            return;
+        }
+        baro_next_update_usec_ = input.time_usec + period_usec;
+        ++baro_updates_;
+        if (!baro_calibrated_) {
+            if (baro_updates_ > baro_warmup_updates_) {
+                baro_ground_sum_pa_ += baro_latest_pressure_pa_;
+                ++baro_ground_count_;
+            }
+            if (baro_ground_count_ < baro_calibration_samples_) {
+                return;
+            }
+            baro_ground_altitude_m_ = ap_altitude_from_pressure_1976(
+                static_cast<float>(baro_ground_sum_pa_ / baro_ground_count_));
+            baro_calibrated_ = true;
+        }
+        baro_header_.primary = 0;
+        baro_header_.num_instances = 1;
+        baro_.instance = 0;
+        baro_.last_update_ms = static_cast<std::uint32_t>(input.time_usec / 1000ULL);
+        baro_.altitude = ap_altitude_from_pressure_1976(static_cast<float>(baro_latest_pressure_pa_))
+            - baro_ground_altitude_m_;
+        baro_.healthy = true;
+        have_baro_ = true;
+        return;
+#endif
         baro_.last_update_ms = static_cast<std::uint32_t>(input.time_usec / 1000ULL);
         // AP_Baro reports altitude relative to the ground level it calibrated
         // at start; the host's pressure altitude is absolute. The first sample
@@ -241,8 +286,13 @@ public:
         have_baro_ = true;
     }
 
-    void push_gps(const EkfHilGpsInput& input)
+    void push_gps(const EkfHilGpsInput& exact_input)
     {
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        const EkfHilGpsInput input = ap_ublox_pvt_fix(exact_input);
+#else
+        const EkfHilGpsInput& input = exact_input;
+#endif
         if (before_first_value(input.time_usec)) {
             return;
         }
@@ -524,6 +574,17 @@ public:
     ArdupilotSensorModelV2Config sensor_model_v2_{};
     double baro_alt_noise_m_{0.0};
     double hgt_delay_ms_{60.0};
+    double baro_update_hz_{0.0};
+    int baro_warmup_updates_{0};
+    int baro_calibration_samples_{0};
+    double baro_latest_pressure_pa_{0.0};
+    bool baro_have_latest_{false};
+    std::uint64_t baro_next_update_usec_{0};
+    int baro_updates_{0};
+    double baro_ground_sum_pa_{0.0};
+    int baro_ground_count_{0};
+    float baro_ground_altitude_m_{0.0f};
+    bool baro_calibrated_{false};
 #endif
 };
 
@@ -569,6 +630,12 @@ void ApEkf3Backend::set_baro_expectations(double alt_noise_m, double hgt_delay_m
     impl_->baro_alt_noise_m_ = alt_noise_m;
     impl_->hgt_delay_ms_ = hgt_delay_ms;
     impl_->apply_frontend_parameters();
+}
+void ApEkf3Backend::set_baro_processing(double update_hz, int warmup_updates, int samples)
+{
+    impl_->baro_update_hz_ = update_hz;
+    impl_->baro_warmup_updates_ = warmup_updates;
+    impl_->baro_calibration_samples_ = samples;
 }
 #endif
 void ApEkf3Backend::push_imu(const EkfImuInput& input, double dt_sec) { impl_->push_imu(input, dt_sec); }

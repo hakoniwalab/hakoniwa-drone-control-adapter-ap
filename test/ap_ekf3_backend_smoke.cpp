@@ -1,4 +1,5 @@
 #include <hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp>
+#include "ap_test_baro.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -17,6 +18,7 @@ using namespace hakoniwa::drone::control_adapter;
 int main()
 {
     ApEkf3Backend ekf;
+    test::configure_baro(ekf);
     ekf.set_debug_csv_path("");
     const auto debug_path = std::filesystem::temp_directory_path() / "hakoniwa-ap-ekf3-debug-test.csv";
     std::filesystem::remove(debug_path);
@@ -55,7 +57,7 @@ int main()
             ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43});
         }
         if (step % 20 == 0) {
-            ekf.push_baro(EkfBaroInput{time_usec, 0.0});
+            ekf.push_baro(test::baro_at(time_usec, 0.0));
         }
         if (step % 80 == 0) {
             EkfHilGpsInput gps{};
@@ -88,7 +90,7 @@ int main()
             ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43});
         }
         if (step % 20 == 0) {
-            ekf.push_baro(EkfBaroInput{time_usec, climb_m});
+            ekf.push_baro(test::baro_at(time_usec, climb_m));
         }
         if (step % 80 == 0) {
             EkfHilGpsInput gps{};
