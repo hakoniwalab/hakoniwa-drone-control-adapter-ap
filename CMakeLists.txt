@@ -168,6 +168,7 @@ if(HAKONIWA_AP_ENABLE_EKF3)
     endfunction()
     add_library(hakoniwa_drone_control_adapter_ap_ekf3 STATIC
         src/ap_ekf3_backend.cpp
+        src/ap_baro_atmosphere.cpp
         src/ardupilot_ekf3_runtime_shim.cpp)
     add_library(
         hakoniwa_drone_control_adapter_ap::ekf3

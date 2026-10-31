@@ -80,6 +80,29 @@ int main(int argc, char** argv)
         catch (const std::invalid_argument&) { refused = true; }
         require(refused, "an out-of-range barometer expectation was accepted");
     }
+    // [SEN-BAR-326] How ArduCopter reads the barometer comes from runtime; each key is required and checked.
+    const auto reading = ArdupilotControllerConfigLoader{}.load_from_text(base);
+    require(reading.ekf.baro_update_hz == 10.0 && reading.ekf.baro_calibration_warmup_updates == 10
+        && reading.ekf.baro_calibration_samples == 5, "the barometer reading was not loaded");
+    for (const char* key : {"baro_update_hz", "baro_calibration_warmup_updates", "baro_calibration_samples"}) {
+        const auto at = base.find(std::string("\"") + key + "\"");
+        require(at != std::string::npos, "the fixture lacks a barometer reading key");
+        const auto renamed = base.substr(0, at + 1) + "x_" + base.substr(at + 1);
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(renamed); }
+        catch (const std::exception&) { refused = true; }
+        require(refused, "a missing barometer reading key was accepted");
+    }
+    for (const char* invalid : {R"("baro_update_hz": 0)", R"("baro_calibration_warmup_updates": 1.5)",
+             R"("baro_calibration_samples": 0)"}) {
+        const std::string key = std::string(invalid).substr(0, std::string(invalid).find(':'));
+        const auto at = base.find(key);
+        const auto end = base.find_first_of(",}\n", at);
+        bool refused = false;
+        try { ArdupilotControllerConfigLoader{}.load_from_text(base.substr(0, at) + invalid + base.substr(end)); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "an invalid barometer reading was accepted");
+    }
     const auto defaults = ArdupilotControllerConfigLoader{}.load_from_text(base);
     require(defaults.ekf.hgt_delay_ms == 60.0 && defaults.ekf.baro_alt_noise_m == 0.0, "baro defaults changed");
     close(ap_rotate_sensor_to_body(defaults.sensor_model_v2, {1, 2, 3}), {1, 2, 3}, "defaults changed value");

@@ -5,7 +5,10 @@
     "attitude_hz": 100,
     "rate_hz": 400,
     "throttle_filter_hz": 0.0,
-    "position_input_shaping": 0
+    "position_input_shaping": 0,
+    "baro_update_hz": 10,
+    "baro_calibration_warmup_updates": 10,
+    "baro_calibration_samples": 5
   },
   "parameters": {
     "takeoff_profile": 1,

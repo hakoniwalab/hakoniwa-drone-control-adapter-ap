@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // [SEN-COM-350] [SEN-COM-295] The mount parameters reach NavEKF3 through ApEkf3Backend (orientation, INS_POS1, GPS1_POS).
 #include <hakoniwa/drone/control_adapter/ap_ekf3_backend.hpp>
+#include "ap_test_baro.hpp"
 #include "hakoniwa/drone/control_adapter/ap_sensor_model_v2.hpp"
+#include "../src/ap_baro_atmosphere.hpp"
 
 #include <array>
 #include <cmath>
@@ -22,6 +24,7 @@ EkfEstimatedState run_at_rest(const ArdupilotSensorModelV2Config& mount, bool up
     double spin_imu_x_m = 0.0, double* max_speed_mps = nullptr, std::array<double, 3> mag_bias_gauss = {})
 {
     ApEkf3Backend ekf;
+    test::configure_baro(ekf);
     ekf.set_debug_csv_path("");
     ekf.set_gps_lag_sec(0.0);
     ekf.set_sensor_model_v2_config(mount);
@@ -51,7 +54,7 @@ EkfEstimatedState run_at_rest(const ArdupilotSensorModelV2Config& mount, bool up
             ekf.push_mag(EkfMagInput{time_usec, 0.22 * std::cos(yaw) + mag_bias_gauss[0],
                 flip * -0.22 * std::sin(yaw) + mag_bias_gauss[1], flip * 0.43 + mag_bias_gauss[2]});
         }
-        if (step % 20 == 0) { ekf.push_baro(EkfBaroInput{time_usec, 0.0}); }
+        if (step % 20 == 0) { ekf.push_baro(test::baro_at(time_usec, 0.0)); }
         if (step % 80 == 0) {
             EkfHilGpsInput gps{};
             gps.time_usec = time_usec;
@@ -78,6 +81,7 @@ EkfEstimatedState run_at_rest(const ArdupilotSensorModelV2Config& mount, bool up
 double height_change_after_baro_step_m(double alt_noise_m)
 {
     ApEkf3Backend ekf;
+    test::configure_baro(ekf);
     ekf.set_debug_csv_path("");
     ekf.set_gps_lag_sec(0.0);
     ekf.set_baro_expectations(alt_noise_m, 60.0);
@@ -94,11 +98,43 @@ double height_change_after_baro_step_m(double alt_noise_m)
         const std::uint64_t time_usec = step * dt_usec;
         ekf.push_imu(EkfImuInput{time_usec, 0.0, 0.0, -9.80665, 0.0, 0.0, 0.0}, dt);
         if (step % 8 == 0) { ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43}); }
-        if (step % 20 == 0) { ekf.push_baro(EkfBaroInput{time_usec, step > 24000 ? 2.0 : 0.0}); }
+        if (step % 20 == 0) { ekf.push_baro(test::baro_at(time_usec, step > 24000 ? 2.0 : 0.0)); }
         if (step == 24000) { before = ekf.get_estimated_state().position_local_ned_m[2]; }
         ekf.update();
     }
     return before - ekf.get_estimated_state().position_local_ned_m[2];
+}
+
+// [SEN-BAR-326] At rest on ground ground_m above sea level, then a step_m barometer step: returns the height
+// estimates (up, metres) just before the step and settle_sec after it.
+std::array<double, 2> heights_around_baro_step_m(double ground_m, double step_m, double settle_sec)
+{
+    ApEkf3Backend ekf;
+    test::configure_baro(ekf);
+    ekf.set_debug_csv_path("");
+    ekf.set_gps_lag_sec(0.0);
+    ekf.set_baro_expectations(0.5, 60.0);
+    EkfAdapterConfig config{};
+    config.mag_declination_deg = 0.0;
+    ekf.set_config(config);
+    ekf.set_armed_status(false);
+    ekf.set_vehicle_at_rest(true);
+    ekf.set_in_air_status(false);
+    constexpr double dt = 0.0025;
+    constexpr std::uint64_t dt_usec = 2500;
+    constexpr std::uint64_t step_at = 24000;
+    const auto steps = step_at + static_cast<std::uint64_t>(settle_sec / dt);
+    double before = 0.0;
+    for (std::uint64_t step = 1; step <= steps; ++step) {
+        const std::uint64_t time_usec = step * dt_usec;
+        ekf.push_imu(EkfImuInput{time_usec, 0.0, 0.0, -9.80665, 0.0, 0.0, 0.0}, dt);
+        if (step % 8 == 0) { ekf.push_mag(EkfMagInput{time_usec, 0.22, 0.0, 0.43}); }
+        // Drone PRO's barometer runs faster than ArduCopter reads it; the plugin keeps only the latest sample.
+        if (step % 4 == 0) { ekf.push_baro(test::baro_at(time_usec, step > step_at ? step_m : 0.0, ground_m)); }
+        if (step == step_at) { before = -ekf.get_estimated_state().position_local_ned_m[2]; }
+        ekf.update();
+    }
+    return {before, -ekf.get_estimated_state().position_local_ned_m[2]};
 }
 
 double tilt_deg(const EkfEstimatedState& state)
@@ -165,6 +201,20 @@ int main()
     const double doubting = height_change_after_baro_step_m(5.0);
     std::cout << "1 s after a 2 m baro step: EK3_ALT_M_NSE 0.5 -> " << trusting << " m, 5 -> " << doubting << " m\n";
     if (!(trusting > 2.0 * doubting && trusting > 0.2)) { return fail("EK3_ALT_M_NSE did not reach EKF"); }
+    // [SEN-BAR-326] ArduPilot's 1976 atmosphere gives back the ISA heights the barometer pressures stand for, as
+    // geometric heights (ISA is geopotential: 2000 m' is 2000.63 m, earth radius 6356.766 km).
+    for (const double height : {0.0, 100.0, 500.0, 2000.0}) {
+        const double geometric = 6356.766e3 * height / (6356.766e3 - height);
+        const double altitude = ap_altitude_from_pressure_1976(static_cast<float>(test::isa_pressure_pa(height)));
+        if (std::abs(altitude - geometric) > 0.05) { return fail("the 1976 atmosphere altitude is off"); }
+    }
+    // The ground pressure is calibrated: at rest 500 m above sea level the height is about zero, and a 2 m step
+    // ends near 2 m.
+    const auto high_ground = heights_around_baro_step_m(500.0, 2.0, 15.0);
+    std::cout << "500 m ground: height at rest " << high_ground[0] << " m, 15 s after a 2 m step "
+              << high_ground[1] << " m\n";
+    if (std::abs(high_ground[0]) > 0.3) { return fail("the ground pressure was not calibrated"); }
+    if (std::abs(high_ground[1] - 2.0) > 0.3) { return fail("the pressure step did not become a 2 m height"); }
     std::cout << "ap_sensor_model_v2_ekf_smoke: PASS\n";
     return EXIT_SUCCESS;
 }

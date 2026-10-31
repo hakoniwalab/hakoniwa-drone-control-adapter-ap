@@ -238,6 +238,8 @@ void* create_backend(void* context, BackendKind kind, const void* argument, char
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
             ekf->set_sensor_model_v2_config(config.sensor_model_v2);
             ekf->set_baro_expectations(config.ekf.baro_alt_noise_m, config.ekf.hgt_delay_ms);
+            ekf->set_baro_processing(config.ekf.baro_update_hz, config.ekf.baro_calibration_warmup_updates,
+                config.ekf.baro_calibration_samples);
 #endif
             if (argument != nullptr) {
                 ekf->set_config(*static_cast<const adapter::EkfAdapterConfig*>(argument));

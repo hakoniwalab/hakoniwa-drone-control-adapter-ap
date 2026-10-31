@@ -31,6 +31,14 @@ struct ArdupilotEkfConfig {
     double hgt_delay_ms{60.0};
     // EK3_ALT_M_NSE (m); 0 keeps NavEKF3's default. Read with the sensor model v2 switch only.
     double baro_alt_noise_m{0.0};
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+    // [SEN-BAR-326] runtime.baro_update_hz / baro_calibration_warmup_updates / baro_calibration_samples (required):
+    // how often ArduCopter reads the barometer (update_altitude) and how AP_Baro::calibrate() sets the ground
+    // pressure (updates waited, then updates averaged).
+    double baro_update_hz{0.0};
+    int baro_calibration_warmup_updates{0};
+    int baro_calibration_samples{0};
+#endif
     std::string debug_csv{};
 };
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
