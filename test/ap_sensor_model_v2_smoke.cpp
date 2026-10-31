@@ -32,6 +32,12 @@ int main(int argc, char** argv)
     ArdupilotSensorModelV2Config yaw{};
     yaw.board_orientation = 2;
     close(ap_rotate_sensor_to_body(yaw, {0.0, -1.0, 0.0}), {1.0, 0.0, 0.0}, "standard Rotation failed");
+    // T-ACC-U1-050 / T-MAG-U1-070: the values the adapter passes to EKF3 with AHRS_ORIENTATION = 2 (Yaw 90).
+    // The accelerometer keeps the lever arm (INS_POS1 lets EKF3 account for it); 50,000 nT = 0.5 gauss.
+    close(ap_rotate_sensor_to_body(yaw, {0.0, 1.3708, -9.81}), {-1.3708, 0.0, -9.81},
+        "T-ACC-U1-050: the accelerometer was not only turned to the body axes");
+    close(ap_correct_mag_sensor_to_body(yaw, {0.0, -0.5, 0.0}), {0.5, 0.0, 0.0},
+        "T-MAG-U1-070: the compass was not turned to the body axes");
     ArdupilotSensorModelV2Config custom{};
     custom.board_orientation = 101;
     custom.custom_rotation_enabled = true;
