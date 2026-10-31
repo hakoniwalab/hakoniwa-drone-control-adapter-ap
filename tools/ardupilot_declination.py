@@ -42,3 +42,27 @@ def magnetic_field(latitude_deg: float, longitude_deg: float, path: Path = TABLE
         "inclination_deg": interpolate(_table("inclination", path)),
         "intensity_gauss": interpolate(_table("intensity", path)),
     }
+
+
+# [SEN-MAG-295] How far a configured simulation.location.magneticField may be from the world magnetic model before
+# the setup records a warning (the configured value is still the one the simulation uses).
+INTENSITY_TOLERANCE = 0.01   # 1 %
+ANGLE_TOLERANCE_DEG = 0.5
+
+
+def magnetic_field_warnings(configured: dict, model: dict[str, float]) -> list[str]:
+    """Compare magneticField (intensity_nT, declination_deg, inclination_deg) with the model at the place."""
+    warnings = []
+    if "intensity_nT" in configured:
+        model_nt = model["intensity_gauss"] * 100000.0
+        ratio = float(configured["intensity_nT"]) / model_nt - 1.0
+        if abs(ratio) > INTENSITY_TOLERANCE:
+            warnings.append(f"magneticField.intensity_nT {float(configured['intensity_nT']):g} differs from the "
+                            f"world magnetic model {model_nt:g} nT by {100.0 * ratio:+.2f}% (more than 1%)")
+    for key in ("declination_deg", "inclination_deg"):
+        if key in configured:
+            difference = float(configured[key]) - model[key]
+            if abs(difference) > ANGLE_TOLERANCE_DEG:
+                warnings.append(f"magneticField.{key} {float(configured[key]):g} differs from the world magnetic "
+                                f"model {model[key]:g} deg by {difference:+.3f} deg (more than 0.5 deg)")
+    return warnings

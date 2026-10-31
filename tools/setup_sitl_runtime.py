@@ -49,7 +49,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ardupilot_declination import magnetic_field
+from ardupilot_declination import magnetic_field, magnetic_field_warnings
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = ROOT / "tuning" / "export_ardupilot_params.py"
@@ -271,9 +271,10 @@ def main() -> int:
     location = tuned["simulation"]["location"]
     field = magnetic_field(float(location["latitude"]), float(location["longitude"]))
     configured_declination = float(location.get("magneticField", {}).get("declination_deg", field["declination_deg"]))
-    if abs(configured_declination - field["declination_deg"]) >= 0.05:
-        print(f"WARNING: configured magnetic declination {configured_declination:g} deg differs from "
-              f"ArduPilot's table {field['declination_deg']:g} deg", file=sys.stderr)
+    # [SEN-MAG-295] Record (do not rewrite) a magneticField far from ArduPilot's world magnetic model table.
+    field_warnings = magnetic_field_warnings(location.get("magneticField", {}), field)
+    for warning in field_warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     sensor_params, sensor_warnings = ardupilot_sensor_parameters(tuned)
     mount_provenance_path = runtime / "drone_config" / "sensor-model-v2-provenance.json"
     mount_params = {}
@@ -469,6 +470,7 @@ cd {out}
         "warnings": sensor_warnings,
         "sensor_model_v2_sitl_parameters": provenance_sitl_params,
         "sensor_model_v2_not_applied": provenance_not_applied,
+        "magnetic_field_warnings": field_warnings,
     })
     print(f"OK: {out}")
     if not ARDUCOPTER.is_file():

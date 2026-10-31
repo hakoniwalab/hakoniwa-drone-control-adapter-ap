@@ -94,7 +94,7 @@ int main(int argc, char** argv)
         catch (const std::invalid_argument&) { refused = true; }
         require(refused, "an out-of-range barometer expectation was accepted");
     }
-    // [SEN-BAR-326] How ArduCopter reads the barometer comes from runtime; each key is required and checked.
+    // [SEN-BAR-326] T-BAR-U1-326: how ArduCopter reads the barometer comes from runtime; each key is required and checked.
     const auto reading = ArdupilotControllerConfigLoader{}.load_from_text(base);
     require(reading.ekf.baro_update_hz == 10.0 && reading.ekf.baro_calibration_warmup_updates == 10
         && reading.ekf.baro_calibration_samples == 5, "the barometer reading was not loaded");
@@ -117,7 +117,7 @@ int main(int argc, char** argv)
         catch (const std::invalid_argument&) { refused = true; }
         require(refused, "an invalid barometer reading was accepted");
     }
-    // [SEN-GPS-385] The receiver's own lag (GPS1_DELAY_MS 0) comes from runtime, required, 0..250 ms.
+    // [SEN-GPS-385] T-GPS-U1-385: the receiver's own lag (GPS1_DELAY_MS 0) comes from runtime, required, 0..250 ms.
     require(reading.ekf.gps_receiver_default_lag_ms == 220.0, "the receiver lag was not loaded");
     {
         const auto at = base.find("\"gps_receiver_default_lag_ms\"");
@@ -132,7 +132,7 @@ int main(int argc, char** argv)
         catch (const std::invalid_argument&) { refused = true; }
         require(refused, "an out-of-range receiver lag was accepted");
     }
-    // [SEN-GPS-380] T-GPS-U1-380: the fix as AP_GPS reads ArduPilot SITL's UBX-NAV-PVT (toward zero, receiver units).
+    // [SEN-GPS-380] T-GPS-U1-380 / T-GPS-U1-080 (ArduPilot): the fix as AP_GPS reads ArduPilot SITL's UBX-NAV-PVT (toward zero, receiver units).
     EkfHilGpsInput exact{};
     exact.lat_deg = 35.68123456789;
     exact.lon_deg = -139.76712345678;
