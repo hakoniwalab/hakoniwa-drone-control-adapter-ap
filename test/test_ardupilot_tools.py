@@ -568,6 +568,16 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.assertEqual(adapter["runtime"]["baro_update_hz"], 10)
         self.assertAlmostEqual(adapter["runtime"]["rate_hz"], 1.0 / 0.003)
 
+    def test_sensor_model_v2_averages_the_imu_over_each_ekf_step(self) -> None:
+        drone, _ = self.run_prepare(sensor_model_v2=True)
+        self.assertIs(drone["controller"]["ekf"]["imuAverage"], True)
+        legacy, _ = self.run_prepare_again()
+        self.assertNotIn("imuAverage", legacy["controller"]["ekf"])
+
+    def run_prepare_again(self, **kwargs) -> tuple[dict, dict]:
+        shutil.rmtree(self.output, ignore_errors=True)
+        return self.run_prepare(**kwargs)
+
     def test_sensor_model_v2_keeps_a_missing_baro_delay_and_clamps_the_noise(self) -> None:
         drone, adapter = self.run_prepare({"baro": {"noise": 0.01}}, sensor_model_v2=True)
         self.assertNotIn("delayMsec", drone["components"]["sensors"]["baro"])
