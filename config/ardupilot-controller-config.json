@@ -8,7 +8,8 @@
     "position_input_shaping": 0,
     "baro_update_hz": 10,
     "baro_calibration_warmup_updates": 10,
-    "baro_calibration_samples": 5
+    "baro_calibration_samples": 5,
+    "gps_receiver_default_lag_ms": 220
   },
   "parameters": {
     "takeoff_profile": 1,

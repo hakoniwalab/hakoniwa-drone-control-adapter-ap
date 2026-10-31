@@ -38,6 +38,9 @@ struct ArdupilotEkfConfig {
     double baro_update_hz{0.0};
     int baro_calibration_warmup_updates{0};
     int baro_calibration_samples{0};
+    // [SEN-GPS-385] runtime.gps_receiver_default_lag_ms (required): the lag AP_GPS takes from the receiver when
+    // GPS1_DELAY_MS is 0. ArduPilot SITL's u-blox does not report its generation, so ArduPilot uses 220 ms.
+    double gps_receiver_default_lag_ms{0.0};
 #endif
     std::string debug_csv{};
 };

@@ -130,6 +130,9 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     if(!std::isfinite(samples)||samples<1||std::trunc(samples)!=samples)throw std::invalid_argument("runtime.baro_calibration_samples must be an integer >= 1");
     c.ekf.baro_calibration_warmup_updates=static_cast<int>(warmup);
     c.ekf.baro_calibration_samples=static_cast<int>(samples);
+    c.ekf.gps_receiver_default_lag_ms=number(s,"gps_receiver_default_lag_ms");
+    if(!std::isfinite(c.ekf.gps_receiver_default_lag_ms)||c.ekf.gps_receiver_default_lag_ms<0||c.ekf.gps_receiver_default_lag_ms>250)
+        throw std::invalid_argument("runtime.gps_receiver_default_lag_ms must be 0..250 ms");
 #else
     // NavEKF3 inside the plugin runs with its default parameters; its height delay cannot be changed.
     if(c.ekf.hgt_delay_ms!=60.0)throw std::invalid_argument("EK3_HGT_DELAY must be 60 (the plugin's NavEKF3 uses the default); set the barometer delay to 60 ms instead");

@@ -72,6 +72,7 @@ std::int32_t metres_to_centimetres(double value)
     return static_cast<std::int32_t>(std::llround(value * 100.0));
 }
 
+
 float finite_float(double value, const char* field)
 {
     if (!std::isfinite(value)) {
@@ -285,8 +286,13 @@ public:
         have_baro_ = true;
     }
 
-    void push_gps(const EkfHilGpsInput& input)
+    void push_gps(const EkfHilGpsInput& exact_input)
     {
+#ifdef HAKO_ENABLE_SENSOR_MODEL_V2
+        const EkfHilGpsInput input = ap_ublox_pvt_fix(exact_input);
+#else
+        const EkfHilGpsInput& input = exact_input;
+#endif
         if (before_first_value(input.time_usec)) {
             return;
         }
