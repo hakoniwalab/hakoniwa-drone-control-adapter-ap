@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import math
+import shutil
 import sys
 import tempfile
 import types
@@ -482,7 +483,8 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
         self.source.mkdir()
 
     def run_prepare(self, sensors: dict | None = None, prop_inch: int | None = None,
-                    model_xml: str | None = None, sensor_preset: str | None = None) -> tuple[dict, dict]:
+                    model_xml: str | None = None, sensor_preset: str | None = None,
+                    sensor_model_v2: bool = False) -> tuple[dict, dict]:
         source_config = {
             "simulation": {"location": {"latitude": 47.641468, "longitude": -122.140165}},
             "components": {"sensors": sensors or {}},
@@ -510,6 +512,8 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
             argv[1:1] = ["--prop-inch", str(prop_inch)]
         if sensor_preset is not None:
             argv[1:1] = ["--sensor-preset", sensor_preset]
+        if sensor_model_v2:
+            argv[1:1] = ["--sensor-model-v2"]
         model = {
             "thrust_hover": 0.42, "hover_duty": 0.5,
             "spin_arm": 0.10, "spin_min": 0.15,
@@ -554,6 +558,30 @@ class PrepareArduPilotInputsTest(unittest.TestCase):
             self.run_prepare({"baro": {"delayMsec": 59}})
         self.assertIn("EK3_HGT_DELAY must be 60", stderr.getvalue())
         self.assertIn("set the barometer delay to 60 ms instead", stderr.getvalue())
+
+    def test_sensor_model_v2_writes_any_baro_delay_and_noise(self) -> None:
+        drone, adapter = self.run_prepare({"baro": {"delayMsec": 30, "noise": 0.5}}, sensor_model_v2=True)
+        self.assertEqual(drone["components"]["sensors"]["baro"]["delayMsec"], 30)
+        self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 30)
+        self.assertEqual(adapter["parameters"]["EK3_ALT_M_NSE"], 0.5)
+        # The barometer reading rate is ArduCopter's, not the main loop's.
+        self.assertEqual(adapter["runtime"]["baro_update_hz"], 10)
+        self.assertAlmostEqual(adapter["runtime"]["rate_hz"], 1.0 / 0.003)
+
+    def test_sensor_model_v2_keeps_a_missing_baro_delay_and_clamps_the_noise(self) -> None:
+        drone, adapter = self.run_prepare({"baro": {"noise": 0.01}}, sensor_model_v2=True)
+        self.assertNotIn("delayMsec", drone["components"]["sensors"]["baro"])
+        self.assertEqual(adapter["parameters"]["EK3_HGT_DELAY"], 0)
+        self.assertEqual(adapter["parameters"]["EK3_ALT_M_NSE"], 0.1)
+        self.assertIn("outside ArduPilot's @Range 0.1..100 m", self.prepare_stdout)
+
+    def test_sensor_model_v2_rejects_a_baro_delay_outside_the_range(self) -> None:
+        for delay in (251, 30.5):
+            shutil.rmtree(self.output, ignore_errors=True)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                self.run_prepare({"baro": {"delayMsec": delay}}, sensor_model_v2=True)
+            self.assertIn("EK3_HGT_DELAY @Range", stderr.getvalue())
 
     def test_sensor_characteristics_are_preserved_without_preset(self) -> None:
         original = {

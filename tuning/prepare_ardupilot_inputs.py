@@ -19,10 +19,11 @@ inputs of a Drone PRO `plugin` tuning profile:
 
 Sensor characteristics remain those of the input vehicle.  The optional
 --sensor-preset ardupilot-sitl-default explicitly installs the historical ArduPilot defaults for
-mag/baro noise, gyro drift, and a missing GPS delay.  This tool keeps the barometer delay at 60 ms,
-NavEKF3's EK3_HGT_DELAY default, which is all a plugin built without HAKO_ENABLE_SENSOR_MODEL_V2 accepts
-(a sensor model v2 plugin also accepts other EK3_HGT_DELAY values and EK3_ALT_M_NSE, but this tool does
-not write them yet).  The tuning, export and SITL runtime take the values from drone_config_0.json, so the
+mag/baro noise, gyro drift, and a missing GPS delay.  Without --sensor-model-v2 this tool keeps the barometer
+delay at 60 ms, NavEKF3's EK3_HGT_DELAY default, which is all a plugin built without
+HAKO_ENABLE_SENSOR_MODEL_V2 accepts.  With --sensor-model-v2 (for a v2 plugin) it writes the configured
+barometer delay as EK3_HGT_DELAY (ArduPilot @Range 0..250 ms) and the barometer noise as EK3_ALT_M_NSE
+(@Range 0.1..100 m).  The tuning, export and SITL runtime take the values from drone_config_0.json, so the
 EKF's allowance matches the configured delay.
 
 Usage:
@@ -49,6 +50,11 @@ from ardupilot_declination import magnetic_field  # noqa: E402
 TEMPLATE = ROOT / "config" / "ardupilot-controller-config.json"
 PLUGIN = ROOT / "install" / "lib" / "libhakoniwa_drone_control_adapter_ap_plugin.so"
 SITL_RATE_HZ = 1.0 / 0.003  # ArduCopter's main loop in SITL: every Hakoniwa physics step
+# The runtime stages that run in ArduCopter's main loop; other *_hz keys (baro_update_hz) keep the template.
+MAIN_LOOP_STAGES = ("altitude_hz", "horizontal_hz", "attitude_hz", "rate_hz")
+# ArduPilot @Range of the barometer expectations a sensor model v2 plugin accepts.
+EK3_HGT_DELAY_RANGE_MS = (0, 250)
+EK3_ALT_M_NSE_RANGE_M = (0.1, 100.0)
 # EKF sensor periods as ArduPilot SITL sees them: IMU each step, compass 10 Hz (ArduCopter reads the
 # compass in a 10 Hz task, ArduCopter/Copter.cpp; at 50 Hz the plugin's yaw was held harder by the
 # compass than SITL's, x500 2026-10-12), baro 100 Hz, GPS 5 Hz (SIM_GPS_HZ default)
@@ -151,6 +157,9 @@ def main() -> int:
     parser.add_argument("--sensor-preset", choices=("ardupilot-sitl-default",),
                         help="explicitly replace mag/baro noise, gyro drift, and a missing GPS delay "
                              "with ArduPilot SITL defaults")
+    parser.add_argument("--sensor-model-v2", action="store_true",
+                        help="for a plugin built with HAKO_ENABLE_SENSOR_MODEL_V2: write any barometer delay "
+                             "as EK3_HGT_DELAY and the barometer noise as EK3_ALT_M_NSE")
     parser.add_argument("source_dir", type=Path, help="the customer's Hakoniwa vehicle directory")
     parser.add_argument("output_dir", type=Path, help="new directory for the ArduPilot tuning inputs")
     args = parser.parse_args()
@@ -203,16 +212,18 @@ def main() -> int:
             "mag noise 0 nT matches ArduPilot SITL SIM_MAG_RND=0",
             "baro noise std 0.2/sqrt(3) m matches the standard deviation of ArduPilot SITL "
             "SIM_BARO_RND=0.2 uniform +/-0.2 m; Drone PRO noise remains Gaussian",
-            "the ArduPilot adapter EKF uses pressure_alt (m), not abs_pressure (Pa); Drone PRO also adds "
-            "the same numeric std to abs_pressure, so its incidental pressure noise is 0.115 Pa "
-            "(about 0.01 m altitude near sea level)",
         ])
+        if not args.sensor_model_v2:
+            drone["notes"].append(
+                "the ArduPilot adapter EKF uses pressure_alt (m), not abs_pressure (Pa); Drone PRO also adds "
+                "the same numeric std to abs_pressure, so its incidental pressure noise is 0.115 Pa "
+                "(about 0.01 m altitude near sea level)")
         changes.append("sensor preset: ArduPilot SITL defaults (mag/baro noise and gyro drift)")
     delays: dict[str, float] = {}
     for name, default in DEFAULT_SENSOR_DELAY_MSEC.items():
         sensor = sensors.setdefault(name, {})
         if "delayMsec" not in sensor:
-            if name == "baro":
+            if name == "baro" and not args.sensor_model_v2:
                 sensor["delayMsec"] = default
                 changes.append(
                     "sensors.baro.delayMsec 60 "
@@ -222,7 +233,20 @@ def main() -> int:
                 sensor["delayMsec"] = default
                 changes.append(f"sensors.{name}.delayMsec {default:g} (ArduPilot SITL)")
         delays[name] = float(sensor.get("delayMsec", 0.0))
-    if delays["baro"] != 60.0:
+    alt_noise_m = None
+    if args.sensor_model_v2:
+        # [SEN-BAR-320] EK3_HGT_DELAY = delayMsec; EK3_ALT_M_NSE = noise (the EKF's expectation of the noise).
+        low, high = EK3_HGT_DELAY_RANGE_MS
+        if not (low <= delays["baro"] <= high) or delays["baro"] != int(delays["baro"]):
+            parser.error(f"sensors.baro.delayMsec must be an integer {low}..{high} ms (EK3_HGT_DELAY @Range)")
+        noise = sensors.get("baro", {}).get("noise")
+        if isinstance(noise, (int, float)) and noise > 0:
+            low, high = EK3_ALT_M_NSE_RANGE_M
+            alt_noise_m = min(max(float(noise), low), high)
+            if alt_noise_m != float(noise):
+                changes.append(f"EK3_ALT_M_NSE {alt_noise_m:g} m: baro noise {float(noise):g} m is outside "
+                               f"ArduPilot's @Range {low:g}..{high:g} m")
+    elif delays["baro"] != 60.0:
         parser.error(
             "EK3_HGT_DELAY must be 60 (the plugin's NavEKF3 uses the default); "
             "set the barometer delay to 60 ms instead"
@@ -234,9 +258,8 @@ def main() -> int:
         config.get("runtime", {}).pop(key, None)
     for key in CONTRACT_TEST_ONLY_PARAMETERS:
         config["parameters"].pop(key, None)
-    for key in config["runtime"]:
-        if key.endswith("_hz"):
-            config["runtime"][key] = SITL_RATE_HZ
+    for key in MAIN_LOOP_STAGES:
+        config["runtime"][key] = SITL_RATE_HZ
     try:
         prop_inch = (args.prop_inch if args.prop_inch is not None
                      else propeller_inches_from_mujoco(output / "drone.xml"))
@@ -270,6 +293,9 @@ def main() -> int:
     })
     config["parameters"]["GPS1_DELAY_MS"] = delays["gps"]
     config["parameters"]["EK3_HGT_DELAY"] = delays["baro"]
+    if alt_noise_m is not None:
+        config["parameters"]["EK3_ALT_M_NSE"] = alt_noise_m
+        changes.append(f"EKF expectation: EK3_ALT_M_NSE {alt_noise_m:g} m (the barometer noise)")
     changes.append(f"EKF allowance: GPS1_DELAY_MS {delays['gps']:g}, EK3_HGT_DELAY {delays['baro']:g} (the sensor delays)")
     changes.append(f"runtime: every stage {SITL_RATE_HZ:.2f} Hz (ArduCopter's main loop in SITL)")
     changes.append(f"initial parameters: {INITIAL_PARAMETER_SOURCE}, propeller {prop_inch} inch")
