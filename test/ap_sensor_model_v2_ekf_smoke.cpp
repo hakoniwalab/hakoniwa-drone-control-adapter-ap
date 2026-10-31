@@ -105,7 +105,7 @@ double height_change_after_baro_step_m(double alt_noise_m)
     return before - ekf.get_estimated_state().position_local_ned_m[2];
 }
 
-// [SEN-BAR-326] At rest on ground ground_m above sea level, then a step_m barometer step: returns the height
+// [SEN-BAR-326] T-BAR-U1-326: at rest on ground ground_m above sea level, then a step_m barometer step: returns the height
 // estimates (up, metres) just before the step and settle_sec after it.
 std::array<double, 2> heights_around_baro_step_m(double ground_m, double step_m, double settle_sec)
 {

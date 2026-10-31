@@ -255,6 +255,37 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         with patch.object(sys, "argv", argv), patch.object(SETUP.subprocess, "run", side_effect=fake_export):
             return SETUP.main()
 
+    def test_magnetic_field_far_from_the_world_model_is_recorded_not_rewritten(self) -> None:
+        # T-MAG-U1-080 [SEN-MAG-295]: W from ArduPilot's own table at the place; 0.9% / +0.4 deg pass, 1.1% /
+        # +0.6 deg / inclination -0.6 deg are recorded. The configured value is what the simulation keeps.
+        declination = load_module("ardupilot_declination", ROOT / "tools" / "ardupilot_declination.py")
+        w = declination.magnetic_field(47.641468, -122.140165)
+        nt = w["intensity_gauss"] * 100000.0
+        exact = {"intensity_nT": nt, "declination_deg": w["declination_deg"], "inclination_deg": w["inclination_deg"]}
+        cases = {
+            "a": ({}, False), "b": ({"intensity_nT": nt * 1.009}, False), "c": ({"intensity_nT": nt * 1.011}, True),
+            "d": ({"declination_deg": w["declination_deg"] + 0.4}, False),
+            "e": ({"declination_deg": w["declination_deg"] + 0.6}, True),
+            "f": ({"inclination_deg": w["inclination_deg"] - 0.6}, True),
+        }
+        for name, (change, warned) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(bool(declination.magnetic_field_warnings({**exact, **change}, w)), warned)
+        shutil.rmtree(self.out, ignore_errors=True)
+        tuned_path = self.runtime / "drone_config_0.json"
+        tuned = json.loads(tuned_path.read_text())
+        tuned["simulation"]["location"]["magneticField"] = {**exact, "intensity_nT": nt * 1.011}
+        tuned_path.write_text(json.dumps(tuned))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.run_setup(self.service), 0)
+        marker = json.loads((self.out / "ardupilot-sitl-runtime.json").read_text())
+        self.assertEqual(len(marker["magnetic_field_warnings"]), 1)
+        self.assertIn("intensity_nT", marker["magnetic_field_warnings"][0])
+        self.assertIn("more than 1%", stderr.getvalue())
+        config = json.loads((self.out / "drone_config" / "drone_config_0.json").read_text())
+        self.assertAlmostEqual(config["simulation"]["location"]["magneticField"]["intensity_nT"], nt * 1.011)
+
     def test_creates_complete_runtime(self) -> None:
         self.assertEqual(self.run_setup(self.service), 0)
         self.assertTrue((self.out / "params.parm").is_file())
@@ -301,6 +332,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         self.assertIn("ArduPilot SITL creates its own GPS", marker["gps_accuracy"]["reason"])
 
     def test_sensor_model_v2_provenance_is_copied_to_sitl_runtime(self) -> None:
+        # T-ACC-U1-190: with ArduPilot SITL making the accel errors, the service config loses zeroGOffset/sensitivity.
         provenance = {
             "ardupilot_sitl_parameters": {
                 "SIM_MAG_RND": 0.5,
@@ -442,7 +474,7 @@ class SetupSitlRuntimeTest(unittest.TestCase):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             self.assertEqual(self.run_setup(self.service), 0)
-        self.assertIn("differs from ArduPilot's table", stderr.getvalue())
+        self.assertIn("magneticField.declination_deg 16 differs from the world magnetic model", stderr.getvalue())
         self.assertIn("COMPASS_DEC,0.27925268", (self.out / "sitl.parm").read_text())
 
     def test_missing_default_service_is_an_error(self) -> None:
