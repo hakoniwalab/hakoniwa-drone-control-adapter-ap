@@ -175,7 +175,7 @@ public:
         imu_.delta_velocity_dt = static_cast<float>(dt_sec);
         imu_.delta_angle_dt = static_cast<float>(dt_sec);
 #ifdef HAKO_ENABLE_SENSOR_MODEL_V2
-        const auto acceleration = ap_rotate_sensor_to_body(sensor_model_v2_,
+        const auto acceleration = ap_correct_accel_sensor_to_body(sensor_model_v2_,
             {input.xacc_mps2, input.yacc_mps2, input.zacc_mps2});
         const auto angular_rate = ap_rotate_sensor_to_body(sensor_model_v2_,
             {input.xgyro_rad_s, input.ygyro_rad_s, input.zgyro_rad_s});
