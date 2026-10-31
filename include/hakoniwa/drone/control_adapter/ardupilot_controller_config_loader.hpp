@@ -54,6 +54,9 @@ struct ArdupilotSensorModelV2Config {
     std::array<double, 3> mag_offset_milligauss{};
     std::array<double, 3> mag_diagonal{{1.0, 1.0, 1.0}};
     std::array<double, 3> mag_offdiagonal{};
+    // [SEN-ACC-300] ArduPilot's accelerometer calibration INS_ACCOFFS_* (m/s^2) and INS_ACCSCAL_*, sensor axes.
+    std::array<double, 3> acc_offset_mps2{};
+    std::array<double, 3> acc_scale{{1.0, 1.0, 1.0}};
 };
 #endif
 struct ArdupilotControllerConfig {

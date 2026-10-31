@@ -73,8 +73,15 @@ ArdupilotControllerConfig ArdupilotControllerConfigLoader::load_from_text(const 
     sensor.mag_offdiagonal = {
         optional_number(s, "COMPASS_ODI_X", 0.0), optional_number(s, "COMPASS_ODI_Y", 0.0),
         optional_number(s, "COMPASS_ODI_Z", 0.0)};
+    sensor.acc_offset_mps2 = {
+        optional_number(s, "INS_ACCOFFS_X", 0.0), optional_number(s, "INS_ACCOFFS_Y", 0.0),
+        optional_number(s, "INS_ACCOFFS_Z", 0.0)};
+    sensor.acc_scale = {
+        optional_number(s, "INS_ACCSCAL_X", 1.0), optional_number(s, "INS_ACCSCAL_Y", 1.0),
+        optional_number(s, "INS_ACCSCAL_Z", 1.0)};
     for (const auto& values : {sensor.imu_position_body_m, sensor.gps_position_body_m,
-             sensor.mag_offset_milligauss, sensor.mag_diagonal, sensor.mag_offdiagonal}) {
+             sensor.mag_offset_milligauss, sensor.mag_diagonal, sensor.mag_offdiagonal,
+             sensor.acc_offset_mps2, sensor.acc_scale}) {
         for (const double value : values) {
             if (!std::isfinite(value)) throw std::invalid_argument("sensor model parameters must be finite");
         }

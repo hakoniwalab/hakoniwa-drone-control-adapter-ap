@@ -38,6 +38,20 @@ int main(int argc, char** argv)
         "T-ACC-U1-050: the accelerometer was not only turned to the body axes");
     close(ap_correct_mag_sensor_to_body(yaw, {0.0, -0.5, 0.0}), {0.5, 0.0, 0.0},
         "T-MAG-U1-070: the compass was not turned to the body axes");
+    // T-ACC-U1-040: INS_ACCOFFS / INS_ACCSCAL made from fixedMg [20, -15, 40] and scaleErrorPct [1, -2, 0] take
+    // Hakoniwa's output back to the specific force (2, 1, -9.81); unset, the value only turns.
+    ArdupilotSensorModelV2Config acc_cal{};
+    close(ap_correct_accel_sensor_to_body(acc_cal, {2.216133, 0.832900, -9.417734}), {2.216133, 0.832900, -9.417734},
+        "missing INS_ACCOFFS/INS_ACCSCAL changed the accelerometer");
+    acc_cal.acc_offset_mps2 = {0.196133, -0.147100, 0.392266};
+    acc_cal.acc_scale = {0.990099, 1.020408, 1.0};
+    close(ap_correct_accel_sensor_to_body(acc_cal, {2.216133, 0.832900, -9.417734}), {2.0, 1.0, -9.81},
+        "T-ACC-U1-040: INS_ACCOFFS/INS_ACCSCAL did not take the output back to the specific force");
+    const auto acc_loaded = ArdupilotControllerConfigLoader{}.load_from_text(with(base,
+        R"("INS_ACCOFFS_X":0.196133,"INS_ACCOFFS_Y":-0.1471,"INS_ACCOFFS_Z":0.392266,)"
+        R"("INS_ACCSCAL_X":0.990099,"INS_ACCSCAL_Y":1.020408,"INS_ACCSCAL_Z":1)"));
+    close(acc_loaded.sensor_model_v2.acc_offset_mps2, {0.196133, -0.1471, 0.392266}, "INS_ACCOFFS was not loaded");
+    close(acc_loaded.sensor_model_v2.acc_scale, {0.990099, 1.020408, 1.0}, "INS_ACCSCAL was not loaded");
     ArdupilotSensorModelV2Config custom{};
     custom.board_orientation = 101;
     custom.custom_rotation_enabled = true;

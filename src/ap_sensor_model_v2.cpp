@@ -73,5 +73,16 @@ EkfHilGpsInput ap_ublox_pvt_fix(const EkfHilGpsInput& input)
     out.sacc_mps = milli_unsigned(input.sacc_mps);
     return out;
 }
+
+std::array<double, 3> ap_correct_accel_sensor_to_body(
+    const ArdupilotSensorModelV2Config& config, const std::array<double, 3>& sensor_mps2)
+{
+    std::array<double, 3> corrected{};
+    for (int axis = 0; axis < 3; ++axis) {
+        corrected[axis] = (static_cast<float>(sensor_mps2[axis]) - static_cast<float>(config.acc_offset_mps2[axis]))
+            * static_cast<float>(config.acc_scale[axis]);
+    }
+    return ap_rotate_sensor_to_body(config, corrected);
+}
 }
 #endif
