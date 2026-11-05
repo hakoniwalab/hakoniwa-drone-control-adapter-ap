@@ -9,7 +9,7 @@ if(HAKO_ENABLE_GOTO_SPEED_LIMIT)
 endif()
 
 option(HAKO_ENABLE_SENSOR_MODEL_V2
-    "Apply ArduPilot sensor orientation, lever arms, and compass calibration" OFF)
+    "Apply ArduPilot sensor orientation, lever arms, and compass calibration (sensor model v2; ON from Drone PRO v5.0.0, OFF only for legacy comparisons)" ON)
 if(HAKO_ENABLE_SENSOR_MODEL_V2)
     add_compile_definitions(HAKO_ENABLE_SENSOR_MODEL_V2)
 endif()
